@@ -6,6 +6,7 @@ description = "A high-performance, parallel CPU voxelizer that converts STL/OBJ 
 license = "MIT"
 keywords = ["voxel", "mesh", "particles"]
 categories = ["science", "simulation", "command-line-utilities"]
+repository = "https://github.com/lhemerly/voxelizer-rs/"
 
 [dependencies]
 anyhow = "1.0.101"
@@ -17,3 +18,8 @@ rayon = "1.11.0"
 serde = {version="1.0.228", features =["derive"]}
 stl_io = "0.10.0"
 tobj = "4.0.3"
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"
