@@ -116,14 +116,13 @@ impl MeshProcessor {
         
         println!("Grid Dimensions: {} x {} x {} (Potential Voxels: {})", nx, ny, nz, nx*ny*nz);
 
-        let yz_steps = (0..ny)
-            .flat_map(|iy| (0..nz).map(move |iz| (iy, iz)))
-            .collect::<Vec<_>>();
-        
-        let particles: Vec<ParticleData> = yz_steps.par_iter().flat_map(|&(iy, iz)| {
-            let mut local_particles = Vec::new();
-            let y = self.bounds_min.y + (iy as f64 * resolution) + (resolution * 0.5);
-            let z = self.bounds_min.z + (iz as f64 * resolution) + (resolution * 0.5);
+        // We avoid collecting the entire yz cartesian product to save memory.
+        // Instead we can use rayon's `into_par_iter` on a range or use flat_map across the ranges.
+        let particles: Vec<ParticleData> = (0..ny).into_par_iter().flat_map(|iy| {
+            (0..nz).into_par_iter().flat_map(move |iz| {
+                let mut local_particles = Vec::new();
+                let y = self.bounds_min.y + (iy as f64 * resolution) + (resolution * 0.5);
+                let z = self.bounds_min.z + (iz as f64 * resolution) + (resolution * 0.5);
 
             // Iterate over X in the inner loop to optimize spatial cache locality.
             // Because rays are cast along the +X direction, doing X sequentially
@@ -156,6 +155,7 @@ impl MeshProcessor {
                 }
             }
             local_particles
+            })
         }).collect();
 
         let duration = start_time.elapsed();
