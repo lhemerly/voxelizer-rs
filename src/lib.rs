@@ -116,26 +116,43 @@ impl MeshProcessor {
         
         println!("Grid Dimensions: {} x {} x {} (Potential Voxels: {})", nx, ny, nz, nx*ny*nz);
 
-        let x_steps = (0..nx).collect::<Vec<_>>();
+        let yz_steps = (0..ny)
+            .flat_map(|iy| (0..nz).map(move |iz| (iy, iz)))
+            .collect::<Vec<_>>();
         
-        let particles: Vec<ParticleData> = x_steps.par_iter().flat_map(|ix| {
-            let x = self.bounds_min.x + (*ix as f64 * resolution) + (resolution * 0.5);
+        let particles: Vec<ParticleData> = yz_steps.par_iter().flat_map(|&(iy, iz)| {
             let mut local_particles = Vec::new();
+            let y = self.bounds_min.y + (iy as f64 * resolution) + (resolution * 0.5);
+            let z = self.bounds_min.z + (iz as f64 * resolution) + (resolution * 0.5);
 
-            for iy in 0..ny {
-                let y = self.bounds_min.y + (iy as f64 * resolution) + (resolution * 0.5);
-                for iz in 0..nz {
-                    let z = self.bounds_min.z + (iz as f64 * resolution) + (resolution * 0.5);
-                    let point = Point::new(x, y, z);
+            // Iterate over X in the inner loop to optimize spatial cache locality.
+            // Because rays are cast along the +X direction, doing X sequentially
+            // keeps the raycast traversals in the same BVH region,
+            // while parallelizing over (Y, Z) ensures finer granularity for Rayon.
+            for ix in 0..nx {
+                let x = self.bounds_min.x + (ix as f64 * resolution) + (resolution * 0.5);
+                let point = Point::new(x, y, z);
+
+                let ray = Ray::new(point, Vector::x());
+                let mut intersections = 0;
+                let mut current_ray = ray;
+                let max_dist = 1000.0;
+
+                while let Some(hit) = self.mesh.cast_local_ray_and_get_normal(&current_ray, max_dist, true) {
+                    intersections += 1;
+                    let hit_point = current_ray.point_at(hit.toi + 1e-4);
+                    current_ray = Ray::new(hit_point, Vector::x());
                     
-                    if self.is_inside(point) {
-                        local_particles.push(ParticleData {
-                            x: x as f32,
-                            y: y as f32,
-                            z: z as f32,
-                            phase: 0,
-                        });
-                    }
+                    if intersections > 20 { break; }
+                }
+
+                if intersections % 2 != 0 {
+                    local_particles.push(ParticleData {
+                        x: x as f32,
+                        y: y as f32,
+                        z: z as f32,
+                        phase: 0,
+                    });
                 }
             }
             local_particles
@@ -145,23 +162,5 @@ impl MeshProcessor {
         println!("Voxelization complete in {:.2?}s", duration);
         
         particles
-    }
-
-    fn is_inside(&self, point: Point<f64>) -> bool {
-        let ray = Ray::new(point, Vector::x()); 
-        let mut intersections = 0;
-        
-        let mut current_ray = ray;
-        let max_dist = 1000.0; 
-        
-        while let Some(hit) = self.mesh.cast_local_ray_and_get_normal(&current_ray, max_dist, true) {
-            intersections += 1;
-            let hit_point = current_ray.point_at(hit.toi + 1e-4);
-            current_ray = Ray::new(hit_point, Vector::x());
-            
-            if intersections > 20 { break; } 
-        }
-
-        intersections % 2 != 0
     }
 }
