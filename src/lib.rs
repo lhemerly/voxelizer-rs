@@ -68,14 +68,28 @@ impl MeshProcessor {
 
         for model in models {
             let mesh = model.mesh;
-            for chunk in mesh.positions.chunks_exact(3) {
+            let pos_chunks = mesh.positions.chunks_exact(3);
+            if !pos_chunks.remainder().is_empty() {
+                anyhow::bail!(
+                    "OBJ positions length ({}) is not divisible by 3; malformed mesh data",
+                    mesh.positions.len()
+                );
+            }
+            for chunk in pos_chunks {
                 all_points.push(Point::new(
                     chunk[0] as f64,
                     chunk[1] as f64,
                     chunk[2] as f64,
                 ));
             }
-            for chunk in mesh.indices.chunks_exact(3) {
+            let idx_chunks = mesh.indices.chunks_exact(3);
+            if !idx_chunks.remainder().is_empty() {
+                anyhow::bail!(
+                    "OBJ indices length ({}) is not divisible by 3; malformed mesh data",
+                    mesh.indices.len()
+                );
+            }
+            for chunk in idx_chunks {
                 all_indices.push([
                     chunk[0] + offset,
                     chunk[1] + offset,
