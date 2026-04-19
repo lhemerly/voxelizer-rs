@@ -23,11 +23,6 @@ pub struct ParticleData {
     pub phase: u32,
 }
 
-unsafe impl Send for ParticleData {}
-unsafe impl Sync for ParticleData {}
-
-type MeshData = (Vec<Point<f64>>, Vec<[u32; 3]>);
-
 pub struct MeshProcessor {
     mesh: TriMesh,
     bounds_min: Point3<f64>,
@@ -37,12 +32,14 @@ pub struct MeshProcessor {
 impl MeshProcessor {
     pub fn from_file(path: &str) -> Result<Self> {
         let path_obj = Path::new(path);
-        let extension = path_obj.extension().and_then(|s| s.to_str()).unwrap_or("");
+        let extension = path_obj.extension().and_then(|s| s.to_str());
+        let ext_lower = extension.map(|e| e.to_lowercase());
 
-        let (points, indices) = match extension.to_lowercase().as_str() {
-            "obj" => Self::load_obj(path)?,
-            "stl" => Self::load_stl(path)?,
-            _ => anyhow::bail!("Unsupported file format: {}", extension),
+        let (points, indices) = match ext_lower.as_deref() {
+            Some("obj") => Self::load_obj(path)?,
+            Some("stl") => Self::load_stl(path)?,
+            Some(ext) => anyhow::bail!("Unsupported file format: {}", ext),
+            None => anyhow::bail!("Missing file extension"),
         };
 
         let mesh = TriMesh::new(points, indices);
@@ -64,8 +61,17 @@ impl MeshProcessor {
             &tobj::LoadOptions { triangulate: true, ..Default::default() }
         )?;
         
-        let mut all_points = Vec::new();
-        let mut all_indices = Vec::new();
+        // Pre-calculate capacities for all vertex positions and triangle faces to avoid
+        // multiple reallocations during vector growth, especially for large OBJ files.
+        let (total_points, total_faces) = models.iter().fold((0, 0), |acc, model| {
+            (
+                acc.0 + model.mesh.positions.len() / 3,
+                acc.1 + model.mesh.indices.len() / 3,
+            )
+        });
+
+        let mut all_points = Vec::with_capacity(total_points);
+        let mut all_indices = Vec::with_capacity(total_faces);
         let mut offset = 0;
 
         for model in models {
@@ -122,7 +128,11 @@ impl MeshProcessor {
         Ok((points, indices))
     }
 
-    pub fn voxelize(&self, resolution: f64) -> Vec<ParticleData> {
+    pub fn voxelize(&self, resolution: f64) -> Result<Vec<ParticleData>> {
+        if resolution <= 1e-6 {
+            anyhow::bail!("Resolution must be greater than 1e-6 to avoid excessive resource usage or division by zero. Provided: {}", resolution);
+        }
+
         let start_time = std::time::Instant::now();
         
         let size = self.bounds_max - self.bounds_min;
@@ -136,7 +146,7 @@ impl MeshProcessor {
         // Instead we can use rayon's `into_par_iter` on a range or use flat_map across the ranges.
         let particles: Vec<ParticleData> = (0..ny).into_par_iter().flat_map(|iy| {
             (0..nz).into_par_iter().flat_map(move |iz| {
-                let mut local_particles = Vec::new();
+                let mut local_particles = Vec::with_capacity(nx as usize);
                 let y = self.bounds_min.y + (iy as f64 * resolution) + (resolution * 0.5);
                 let z = self.bounds_min.z + (iz as f64 * resolution) + (resolution * 0.5);
 
@@ -177,6 +187,101 @@ impl MeshProcessor {
         let duration = start_time.elapsed();
         println!("Voxelization complete in {:.2?}s", duration);
         
-        particles
+        Ok(particles)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_voxelize_invalid_resolution() {
+        let points = vec![
+            Point::new(0.0, 0.0, 0.0),
+            Point::new(1.0, 0.0, 0.0),
+            Point::new(0.0, 1.0, 0.0),
+        ];
+        let indices = vec![[0, 1, 2]];
+        let mesh = TriMesh::new(points, indices);
+        let bounds_min = Point3::new(0.0, 0.0, 0.0);
+        let bounds_max = Point3::new(1.0, 1.0, 1.0);
+        let processor = MeshProcessor { mesh, bounds_min, bounds_max };
+
+        assert!(processor.voxelize(0.0).is_err());
+        assert!(processor.voxelize(-1.0).is_err());
+        assert!(processor.voxelize(1e-7).is_err());
+        assert!(processor.voxelize(1e-5).is_ok());
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use parry3d::math::Point;
+
+    #[test]
+    fn test_voxelize_cube() {
+        let points = vec![
+            Point::new(0.0, 0.0, 0.0),
+            Point::new(1.0, 0.0, 0.0),
+            Point::new(1.0, 1.0, 0.0),
+            Point::new(0.0, 1.0, 0.0),
+            Point::new(0.0, 0.0, 1.0),
+            Point::new(1.0, 0.0, 1.0),
+            Point::new(1.0, 1.0, 1.0),
+            Point::new(0.0, 1.0, 1.0),
+        ];
+
+        let indices = vec![
+            [0, 1, 2], [0, 2, 3], // Front
+            [5, 4, 7], [5, 7, 6], // Back
+            [4, 5, 1], [4, 1, 0], // Bottom
+            [3, 2, 6], [3, 6, 7], // Top
+            [4, 0, 3], [4, 3, 7], // Left
+            [1, 5, 6], [1, 6, 2], // Right
+        ];
+
+        let mesh = TriMesh::new(points, indices);
+        let aabb = mesh.local_aabb();
+        let bounds_min = aabb.mins;
+        let bounds_max = aabb.maxs;
+
+        let processor = MeshProcessor {
+            mesh,
+            bounds_min,
+            bounds_max,
+        };
+
+        let particles = processor.voxelize(0.5);
+        assert_eq!(particles.len(), 8, "Expected 8 voxels for a 1x1x1 cube at 0.5 resolution");
+
+        for p in &particles {
+            assert!(p.x == 0.25 || p.x == 0.75);
+            assert!(p.y == 0.25 || p.y == 0.75);
+            assert!(p.z == 0.25 || p.z == 0.75);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_from_file_unsupported_extension() {
+        let err = MeshProcessor::from_file("test.txt")
+            .err()
+            .expect("Expected an error for unsupported extension")
+            .to_string();
+        assert!(err.contains("Unsupported file format"));
+        assert!(err.contains("txt"));
+    }
+
+    #[test]
+    fn test_from_file_no_extension() {
+        let err = MeshProcessor::from_file("test")
+            .err()
+            .expect("Expected an error for missing extension");
+        assert!(err.to_string().contains("Missing file extension"));
     }
 }
