@@ -130,7 +130,7 @@ impl MeshProcessor {
         // Instead we can use rayon's `into_par_iter` on a range or use flat_map across the ranges.
         let particles: Vec<ParticleData> = (0..ny).into_par_iter().flat_map(|iy| {
             (0..nz).into_par_iter().flat_map(move |iz| {
-                let mut local_particles = Vec::new();
+                let mut local_particles = Vec::with_capacity(nx as usize);
                 let y = self.bounds_min.y + (iy as f64 * resolution) + (resolution * 0.5);
                 let z = self.bounds_min.z + (iz as f64 * resolution) + (resolution * 0.5);
 
