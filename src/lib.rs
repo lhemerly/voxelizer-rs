@@ -164,3 +164,51 @@ impl MeshProcessor {
         particles
     }
 }
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use parry3d::math::Point;
+
+    #[test]
+    fn test_voxelize_cube() {
+        let points = vec![
+            Point::new(0.0, 0.0, 0.0),
+            Point::new(1.0, 0.0, 0.0),
+            Point::new(1.0, 1.0, 0.0),
+            Point::new(0.0, 1.0, 0.0),
+            Point::new(0.0, 0.0, 1.0),
+            Point::new(1.0, 0.0, 1.0),
+            Point::new(1.0, 1.0, 1.0),
+            Point::new(0.0, 1.0, 1.0),
+        ];
+
+        let indices = vec![
+            [0, 1, 2], [0, 2, 3], // Front
+            [5, 4, 7], [5, 7, 6], // Back
+            [4, 5, 1], [4, 1, 0], // Bottom
+            [3, 2, 6], [3, 6, 7], // Top
+            [4, 0, 3], [4, 3, 7], // Left
+            [1, 5, 6], [1, 6, 2], // Right
+        ];
+
+        let mesh = TriMesh::new(points, indices);
+        let aabb = mesh.local_aabb();
+        let bounds_min = aabb.mins;
+        let bounds_max = aabb.maxs;
+
+        let processor = MeshProcessor {
+            mesh,
+            bounds_min,
+            bounds_max,
+        };
+
+        let particles = processor.voxelize(0.5);
+        assert_eq!(particles.len(), 8, "Expected 8 voxels for a 1x1x1 cube at 0.5 resolution");
+
+        for p in &particles {
+            assert!(p.x == 0.25 || p.x == 0.75);
+            assert!(p.y == 0.25 || p.y == 0.75);
+            assert!(p.z == 0.25 || p.z == 0.75);
+        }
+    }
+}
