@@ -23,9 +23,6 @@ pub struct ParticleData {
     pub phase: u32,
 }
 
-unsafe impl Send for ParticleData {}
-unsafe impl Sync for ParticleData {}
-
 pub struct MeshProcessor {
     mesh: TriMesh,
     bounds_min: Point3<f64>,
