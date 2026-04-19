@@ -68,18 +68,18 @@ impl MeshProcessor {
 
         for model in models {
             let mesh = model.mesh;
-            for i in 0..mesh.positions.len() / 3 {
+            for chunk in mesh.positions.chunks_exact(3) {
                 all_points.push(Point::new(
-                    mesh.positions[i * 3] as f64,
-                    mesh.positions[i * 3 + 1] as f64,
-                    mesh.positions[i * 3 + 2] as f64,
+                    chunk[0] as f64,
+                    chunk[1] as f64,
+                    chunk[2] as f64,
                 ));
             }
-            for i in 0..mesh.indices.len() / 3 {
+            for chunk in mesh.indices.chunks_exact(3) {
                 all_indices.push([
-                    mesh.indices[i * 3] + offset,
-                    mesh.indices[i * 3 + 1] + offset,
-                    mesh.indices[i * 3 + 2] + offset,
+                    chunk[0] + offset,
+                    chunk[1] + offset,
+                    chunk[2] + offset,
                 ]);
             }
             offset += (mesh.positions.len() / 3) as u32;
