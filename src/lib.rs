@@ -106,7 +106,11 @@ impl MeshProcessor {
         Ok((points, indices))
     }
 
-    pub fn voxelize(&self, resolution: f64) -> Vec<ParticleData> {
+    pub fn voxelize(&self, resolution: f64) -> Result<Vec<ParticleData>> {
+        if !resolution.is_finite() || resolution <= 1e-6 {
+            anyhow::bail!("Resolution must be a finite number greater than 1e-6 to avoid excessive resource usage or division by zero. Provided: {}", resolution);
+        }
+
         let start_time = std::time::Instant::now();
         
         let size = self.bounds_max - self.bounds_min;
@@ -161,6 +165,32 @@ impl MeshProcessor {
         let duration = start_time.elapsed();
         println!("Voxelization complete in {:.2?}s", duration);
         
-        particles
+        Ok(particles)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_voxelize_invalid_resolution() {
+        let points = vec![
+            Point::new(0.0, 0.0, 0.0),
+            Point::new(1.0, 0.0, 0.0),
+            Point::new(0.0, 1.0, 0.0),
+        ];
+        let indices = vec![[0, 1, 2]];
+        let mesh = TriMesh::new(points, indices);
+        let bounds_min = Point3::new(0.0, 0.0, 0.0);
+        let bounds_max = Point3::new(1.0, 1.0, 1.0);
+        let processor = MeshProcessor { mesh, bounds_min, bounds_max };
+
+        assert!(processor.voxelize(0.0).is_err());
+        assert!(processor.voxelize(-1.0).is_err());
+        assert!(processor.voxelize(1e-7).is_err());
+        assert!(processor.voxelize(f64::NAN).is_err());
+        assert!(processor.voxelize(f64::INFINITY).is_err());
+        assert!(processor.voxelize(1e-5).is_ok());
     }
 }
