@@ -6,6 +6,7 @@ use parry3d::shape::TriMesh;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::fs::File;
+use std::io::BufReader;
 use std::path::Path;
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -88,8 +89,9 @@ impl MeshProcessor {
     }
 
     fn load_stl(path: &str) -> Result<(Vec<Point<f64>>, Vec<[u32; 3]>)> {
-        let mut file = File::open(path)?;
-        let stl = stl_io::read_stl(&mut file)?;
+        let file = File::open(path)?;
+        let mut reader = BufReader::new(file);
+        let stl = stl_io::read_stl(&mut reader)?;
         
         let points: Vec<Point<f64>> = stl.vertices.iter()
             .map(|v| Point::new(v[0] as f64, v[1] as f64, v[2] as f64))
