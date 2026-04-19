@@ -186,6 +186,8 @@ mod tests {
 
     impl Drop for TempFile {
         fn drop(&mut self) {
+            // Ignore errors: file may already be gone or we lack permissions;
+            // either way there is nothing useful to do inside a Drop impl.
             let _ = std::fs::remove_file(&self.0);
         }
     }
@@ -265,7 +267,7 @@ mod tests {
     #[test]
     fn test_from_file_non_existent() {
         let path = get_temp_file_path("does_not_exist.obj");
-        // Do not create the file — just verify loading a missing file returns an error.
+        // Do not create the file - just verify loading a missing file returns an error.
         let result = MeshProcessor::from_file(&path);
         assert!(result.is_err());
     }
