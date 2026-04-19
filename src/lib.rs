@@ -175,9 +175,10 @@ mod tests {
     fn test_from_file_unsupported_extension() {
         let err = MeshProcessor::from_file("test.txt")
             .err()
-            .expect("Expected an error for unsupported extension");
-        assert!(err.to_string().contains("Unsupported file format"));
-        assert!(err.to_string().contains("txt"));
+            .expect("Expected an error for unsupported extension")
+            .to_string();
+        assert!(err.contains("Unsupported file format"));
+        assert!(err.contains("txt"));
     }
 
     #[test]
