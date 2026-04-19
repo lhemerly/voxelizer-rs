@@ -26,6 +26,8 @@ pub struct ParticleData {
 unsafe impl Send for ParticleData {}
 unsafe impl Sync for ParticleData {}
 
+type MeshData = (Vec<Point<f64>>, Vec<[u32; 3]>);
+
 pub struct MeshProcessor {
     mesh: TriMesh,
     bounds_min: Point3<f64>,
@@ -56,8 +58,7 @@ impl MeshProcessor {
         })
     }
 
-    #[allow(clippy::type_complexity)]
-    fn load_obj(path: &str) -> Result<(Vec<Point<f64>>, Vec<[u32; 3]>)> {
+    fn load_obj(path: &str) -> Result<MeshData> {
         let (models, _) = tobj::load_obj(
             path,
             &tobj::LoadOptions { triangulate: true, ..Default::default() }
@@ -69,6 +70,20 @@ impl MeshProcessor {
 
         for model in models {
             let mesh = model.mesh;
+            if mesh.positions.len() % 3 != 0 {
+                anyhow::bail!(
+                    "Model '{}' has a malformed positions array (length {} is not a multiple of 3)",
+                    model.name,
+                    mesh.positions.len()
+                );
+            }
+            if mesh.indices.len() % 3 != 0 {
+                anyhow::bail!(
+                    "Model '{}' has a malformed indices array (length {} is not a multiple of 3)",
+                    model.name,
+                    mesh.indices.len()
+                );
+            }
             for chunk in mesh.positions.chunks_exact(3) {
                 all_points.push(Point::new(
                     chunk[0] as f64,
@@ -88,8 +103,7 @@ impl MeshProcessor {
         Ok((all_points, all_indices))
     }
 
-    #[allow(clippy::type_complexity)]
-    fn load_stl(path: &str) -> Result<(Vec<Point<f64>>, Vec<[u32; 3]>)> {
+    fn load_stl(path: &str) -> Result<MeshData> {
         let mut file = File::open(path)?;
         let stl = stl_io::read_stl(&mut file)?;
         
