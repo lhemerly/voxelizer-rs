@@ -1,8 +1,8 @@
 use clap::Parser;
-use voxelizer_rs::{MeshProcessor, ParticleHeader};
 use std::fs::File;
 use std::io::BufWriter;
 use std::path::PathBuf;
+use voxelizer_rs::{MeshProcessor, ParticleHeader};
 
 #[derive(Parser, Debug)]
 #[command(author, version, about = "Voxelizer")]
@@ -25,7 +25,7 @@ fn main() -> anyhow::Result<()> {
 
     let processor = MeshProcessor::from_file(&args.input)?;
     let particles = processor.voxelize(args.resolution);
-    
+
     println!("Generated {} particles.", particles.len());
 
     let file = File::create(PathBuf::from(&args.output))?;
@@ -36,7 +36,7 @@ fn main() -> anyhow::Result<()> {
         particle_count: particles.len() as u64,
         resolution: args.resolution,
     };
-    
+
     bincode::serialize_into(&mut writer, &header)?;
     bincode::serialize_into(&mut writer, &particles)?;
 
