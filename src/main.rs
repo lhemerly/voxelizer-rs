@@ -1,7 +1,6 @@
 use clap::Parser;
 use std::fs::File;
 use std::io::BufWriter;
-use std::path::PathBuf;
 use voxelizer_rs::{MeshProcessor, ParticleHeader};
 
 #[derive(Parser, Debug)]
@@ -13,8 +12,19 @@ struct Args {
     #[arg(short, long)]
     output: String,
 
-    #[arg(short, long, default_value_t = 0.5)]
+    #[arg(short, long, default_value_t = 0.5, value_parser = validate_resolution)]
     resolution: f64,
+}
+
+fn validate_resolution(s: &str) -> Result<f64, String> {
+    let val: f64 = s.parse().map_err(|_| format!("`{s}` isn't a number"))?;
+    if val > 1e-6 {
+        Ok(val)
+    } else {
+        Err(format!(
+            "Resolution must be greater than 1e-6. Provided: {s}"
+        ))
+    }
 }
 
 fn main() -> anyhow::Result<()> {
@@ -24,11 +34,11 @@ fn main() -> anyhow::Result<()> {
     println!("Resolution: {} mm", args.resolution);
 
     let processor = MeshProcessor::from_file(&args.input)?;
-    let particles = processor.voxelize(args.resolution);
+    let particles = processor.voxelize(args.resolution)?;
 
     println!("Generated {} particles.", particles.len());
 
-    let file = File::create(PathBuf::from(&args.output))?;
+    let file = File::create(&args.output)?;
     let mut writer = BufWriter::new(file);
 
     let header = ParticleHeader {

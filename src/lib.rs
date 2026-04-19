@@ -23,8 +23,7 @@ pub struct ParticleData {
     pub phase: u32,
 }
 
-unsafe impl Send for ParticleData {}
-unsafe impl Sync for ParticleData {}
+type MeshData = (Vec<Point<f64>>, Vec<[u32; 3]>);
 
 pub struct MeshProcessor {
     mesh: TriMesh,
@@ -35,12 +34,14 @@ pub struct MeshProcessor {
 impl MeshProcessor {
     pub fn from_file(path: &str) -> Result<Self> {
         let path_obj = Path::new(path);
-        let extension = path_obj.extension().and_then(|s| s.to_str()).unwrap_or("");
+        let extension = path_obj.extension().and_then(|s| s.to_str());
+        let ext_lower = extension.map(|e| e.to_lowercase());
 
-        let (points, indices) = match extension.to_lowercase().as_str() {
-            "obj" => Self::load_obj(path)?,
-            "stl" => Self::load_stl(path)?,
-            _ => anyhow::bail!("Unsupported file format: {}", extension),
+        let (points, indices) = match ext_lower.as_deref() {
+            Some("obj") => Self::load_obj(path)?,
+            Some("stl") => Self::load_stl(path)?,
+            Some(ext) => anyhow::bail!("Unsupported file format: {}", ext),
+            None => anyhow::bail!("Missing file extension"),
         };
 
         let mesh = TriMesh::new(points, indices);
@@ -56,8 +57,7 @@ impl MeshProcessor {
         })
     }
 
-    #[allow(clippy::type_complexity)]
-    fn load_obj(path: &str) -> Result<(Vec<Point<f64>>, Vec<[u32; 3]>)> {
+    fn load_obj(path: &str) -> Result<MeshData> {
         let (models, _) = tobj::load_obj(
             path,
             &tobj::LoadOptions {
@@ -66,33 +66,51 @@ impl MeshProcessor {
             },
         )?;
 
-        let mut all_points = Vec::new();
-        let mut all_indices = Vec::new();
+        // Pre-calculate capacities for all vertex positions and triangle faces to avoid
+        // multiple reallocations during vector growth, especially for large OBJ files.
+        let (total_points, total_faces) = models.iter().fold((0, 0), |acc, model| {
+            (
+                acc.0 + model.mesh.positions.len() / 3,
+                acc.1 + model.mesh.indices.len() / 3,
+            )
+        });
+
+        let mut all_points = Vec::with_capacity(total_points);
+        let mut all_indices = Vec::with_capacity(total_faces);
         let mut offset = 0;
 
         for model in models {
             let mesh = model.mesh;
-            for i in 0..mesh.positions.len() / 3 {
+            if mesh.positions.len() % 3 != 0 {
+                anyhow::bail!(
+                    "Model '{}' has a malformed positions array (length {} is not a multiple of 3)",
+                    model.name,
+                    mesh.positions.len()
+                );
+            }
+            if mesh.indices.len() % 3 != 0 {
+                anyhow::bail!(
+                    "Model '{}' has a malformed indices array (length {} is not a multiple of 3)",
+                    model.name,
+                    mesh.indices.len()
+                );
+            }
+            for chunk in mesh.positions.chunks_exact(3) {
                 all_points.push(Point::new(
-                    mesh.positions[i * 3] as f64,
-                    mesh.positions[i * 3 + 1] as f64,
-                    mesh.positions[i * 3 + 2] as f64,
+                    chunk[0] as f64,
+                    chunk[1] as f64,
+                    chunk[2] as f64,
                 ));
             }
-            for i in 0..mesh.indices.len() / 3 {
-                all_indices.push([
-                    mesh.indices[i * 3] + offset,
-                    mesh.indices[i * 3 + 1] + offset,
-                    mesh.indices[i * 3 + 2] + offset,
-                ]);
+            for chunk in mesh.indices.chunks_exact(3) {
+                all_indices.push([chunk[0] + offset, chunk[1] + offset, chunk[2] + offset]);
             }
             offset += (mesh.positions.len() / 3) as u32;
         }
         Ok((all_points, all_indices))
     }
 
-    #[allow(clippy::type_complexity)]
-    fn load_stl(path: &str) -> Result<(Vec<Point<f64>>, Vec<[u32; 3]>)> {
+    fn load_stl(path: &str) -> Result<MeshData> {
         let mut file = File::open(path)?;
         let stl = stl_io::read_stl(&mut file)?;
 
@@ -117,7 +135,14 @@ impl MeshProcessor {
         Ok((points, indices))
     }
 
-    pub fn voxelize(&self, resolution: f64) -> Vec<ParticleData> {
+    pub fn voxelize(&self, resolution: f64) -> Result<Vec<ParticleData>> {
+        if resolution <= 1e-6 {
+            anyhow::bail!(
+                "Resolution must be greater than 1e-6 to avoid excessive resource usage or division by zero. Provided: {}",
+                resolution
+            );
+        }
+
         let start_time = std::time::Instant::now();
 
         let size = self.bounds_max - self.bounds_min;
@@ -139,7 +164,7 @@ impl MeshProcessor {
             .into_par_iter()
             .flat_map(|iy| {
                 (0..nz).into_par_iter().flat_map(move |iz| {
-                    let mut local_particles = Vec::new();
+                    let mut local_particles = Vec::with_capacity(nx as usize);
                     let y = self.bounds_min.y + (iy as f64 * resolution) + (resolution * 0.5);
                     let z = self.bounds_min.z + (iz as f64 * resolution) + (resolution * 0.5);
 
@@ -186,6 +211,105 @@ impl MeshProcessor {
         let duration = start_time.elapsed();
         println!("Voxelization complete in {:.2?}s", duration);
 
-        particles
+        Ok(particles)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_voxelize_invalid_resolution() {
+        let points = vec![
+            Point::new(0.0, 0.0, 0.0),
+            Point::new(1.0, 0.0, 0.0),
+            Point::new(0.0, 1.0, 0.0),
+        ];
+        let indices = vec![[0, 1, 2]];
+        let mesh = TriMesh::new(points, indices);
+        let bounds_min = Point3::new(0.0, 0.0, 0.0);
+        let bounds_max = Point3::new(1.0, 1.0, 1.0);
+        let processor = MeshProcessor {
+            mesh,
+            bounds_min,
+            bounds_max,
+        };
+
+        assert!(processor.voxelize(0.0).is_err());
+        assert!(processor.voxelize(-1.0).is_err());
+        assert!(processor.voxelize(1e-7).is_err());
+        assert!(processor.voxelize(0.5).is_ok());
+    }
+
+    #[test]
+    fn test_voxelize_cube() {
+        let points = vec![
+            Point::new(0.0, 0.0, 0.0),
+            Point::new(1.0, 0.0, 0.0),
+            Point::new(1.0, 1.0, 0.0),
+            Point::new(0.0, 1.0, 0.0),
+            Point::new(0.0, 0.0, 1.0),
+            Point::new(1.0, 0.0, 1.0),
+            Point::new(1.0, 1.0, 1.0),
+            Point::new(0.0, 1.0, 1.0),
+        ];
+
+        let indices = vec![
+            [0, 1, 2],
+            [0, 2, 3], // Front
+            [5, 4, 7],
+            [5, 7, 6], // Back
+            [4, 5, 1],
+            [4, 1, 0], // Bottom
+            [3, 2, 6],
+            [3, 6, 7], // Top
+            [4, 0, 3],
+            [4, 3, 7], // Left
+            [1, 5, 6],
+            [1, 6, 2], // Right
+        ];
+
+        let mesh = TriMesh::new(points, indices);
+        let aabb = mesh.local_aabb();
+        let bounds_min = aabb.mins;
+        let bounds_max = aabb.maxs;
+
+        let processor = MeshProcessor {
+            mesh,
+            bounds_min,
+            bounds_max,
+        };
+
+        let particles = processor.voxelize(0.5).unwrap();
+        assert_eq!(
+            particles.len(),
+            8,
+            "Expected 8 voxels for a 1x1x1 cube at 0.5 resolution"
+        );
+
+        for p in &particles {
+            assert!(p.x == 0.25 || p.x == 0.75);
+            assert!(p.y == 0.25 || p.y == 0.75);
+            assert!(p.z == 0.25 || p.z == 0.75);
+        }
+    }
+
+    #[test]
+    fn test_from_file_unsupported_extension() {
+        let err = MeshProcessor::from_file("test.txt")
+            .err()
+            .expect("Expected an error for unsupported extension")
+            .to_string();
+        assert!(err.contains("Unsupported file format"));
+        assert!(err.contains("txt"));
+    }
+
+    #[test]
+    fn test_from_file_no_extension() {
+        let err = MeshProcessor::from_file("test")
+            .err()
+            .expect("Expected an error for missing extension");
+        assert!(err.to_string().contains("Missing file extension"));
     }
 }
