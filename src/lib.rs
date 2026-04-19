@@ -62,8 +62,17 @@ impl MeshProcessor {
             &tobj::LoadOptions { triangulate: true, ..Default::default() }
         )?;
         
-        let mut all_points = Vec::new();
-        let mut all_indices = Vec::new();
+        // Pre-calculate capacities for all vertex positions and triangle faces to avoid
+        // multiple reallocations during vector growth, especially for large OBJ files.
+        let (total_points, total_faces) = models.iter().fold((0, 0), |acc, model| {
+            (
+                acc.0 + model.mesh.positions.len() / 3,
+                acc.1 + model.mesh.indices.len() / 3,
+            )
+        });
+
+        let mut all_points = Vec::with_capacity(total_points);
+        let mut all_indices = Vec::with_capacity(total_faces);
         let mut offset = 0;
 
         for model in models {
