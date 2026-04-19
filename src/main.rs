@@ -2,7 +2,6 @@ use clap::Parser;
 use voxelizer_rs::{MeshProcessor, ParticleHeader};
 use std::fs::File;
 use std::io::BufWriter;
-use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about = "Voxelizer")]
@@ -28,7 +27,7 @@ fn main() -> anyhow::Result<()> {
     
     println!("Generated {} particles.", particles.len());
 
-    let file = File::create(PathBuf::from(&args.output))?;
+    let file = File::create(&args.output)?;
     let mut writer = BufWriter::new(file);
 
     let header = ParticleHeader {
