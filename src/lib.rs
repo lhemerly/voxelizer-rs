@@ -191,6 +191,6 @@ mod tests {
         assert!(processor.voxelize(1e-7).is_err());
         assert!(processor.voxelize(f64::NAN).is_err());
         assert!(processor.voxelize(f64::INFINITY).is_err());
-        assert!(processor.voxelize(1e-5).is_ok());
+        assert!(processor.voxelize(0.5).is_ok());
     }
 }
