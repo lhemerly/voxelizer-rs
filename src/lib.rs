@@ -32,12 +32,14 @@ pub struct MeshProcessor {
 impl MeshProcessor {
     pub fn from_file(path: &str) -> Result<Self> {
         let path_obj = Path::new(path);
-        let extension = path_obj.extension().and_then(|s| s.to_str()).unwrap_or("");
+        let extension = path_obj.extension().and_then(|s| s.to_str());
+        let ext_lower = extension.map(|e| e.to_lowercase());
 
-        let (points, indices) = match extension.to_lowercase().as_str() {
-            "obj" => Self::load_obj(path)?,
-            "stl" => Self::load_stl(path)?,
-            _ => anyhow::bail!("Unsupported file format: {}", extension),
+        let (points, indices) = match ext_lower.as_deref() {
+            Some("obj") => Self::load_obj(path)?,
+            Some("stl") => Self::load_stl(path)?,
+            Some(ext) => anyhow::bail!("Unsupported file format: {}", ext),
+            None => anyhow::bail!("Missing file extension"),
         };
 
         let mesh = TriMesh::new(points, indices);
@@ -258,5 +260,28 @@ mod tests {
             assert!(p.y == 0.25 || p.y == 0.75);
             assert!(p.z == 0.25 || p.z == 0.75);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_from_file_unsupported_extension() {
+        let err = MeshProcessor::from_file("test.txt")
+            .err()
+            .expect("Expected an error for unsupported extension")
+            .to_string();
+        assert!(err.contains("Unsupported file format"));
+        assert!(err.contains("txt"));
+    }
+
+    #[test]
+    fn test_from_file_no_extension() {
+        let err = MeshProcessor::from_file("test")
+            .err()
+            .expect("Expected an error for missing extension");
+        assert!(err.to_string().contains("Missing file extension"));
     }
 }
