@@ -68,20 +68,20 @@ impl MeshProcessor {
 
         for model in models {
             let mesh = model.mesh;
-            for i in 0..mesh.positions.len() / 3 {
-                all_points.push(Point::new(
-                    mesh.positions[i * 3] as f64,
-                    mesh.positions[i * 3 + 1] as f64,
-                    mesh.positions[i * 3 + 2] as f64,
-                ));
-            }
-            for i in 0..mesh.indices.len() / 3 {
-                all_indices.push([
-                    mesh.indices[i * 3] + offset,
-                    mesh.indices[i * 3 + 1] + offset,
-                    mesh.indices[i * 3 + 2] + offset,
-                ]);
-            }
+            all_points.extend(mesh.positions.chunks_exact(3).map(|chunk| {
+                Point::new(
+                    chunk[0] as f64,
+                    chunk[1] as f64,
+                    chunk[2] as f64,
+                )
+            }));
+            all_indices.extend(mesh.indices.chunks_exact(3).map(|chunk| {
+                [
+                    chunk[0] + offset,
+                    chunk[1] + offset,
+                    chunk[2] + offset,
+                ]
+            }));
             offset += (mesh.positions.len() / 3) as u32;
         }
         Ok((all_points, all_indices))
@@ -106,7 +106,10 @@ impl MeshProcessor {
         Ok((points, indices))
     }
 
-    pub fn voxelize(&self, resolution: f64) -> Vec<ParticleData> {
+    pub fn voxelize(&self, resolution: f64) -> Result<Vec<ParticleData>> {
+        if resolution < 1e-6 {
+            anyhow::bail!("Resolution too small: {}", resolution);
+        }
         let start_time = std::time::Instant::now();
         
         let size = self.bounds_max - self.bounds_min;
@@ -161,6 +164,6 @@ impl MeshProcessor {
         let duration = start_time.elapsed();
         println!("Voxelization complete in {:.2?}s", duration);
         
-        particles
+        Ok(particles)
     }
 }

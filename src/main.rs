@@ -24,7 +24,7 @@ fn main() -> anyhow::Result<()> {
     println!("Resolution: {} mm", args.resolution);
 
     let processor = MeshProcessor::from_file(&args.input)?;
-    let particles = processor.voxelize(args.resolution);
+    let particles = processor.voxelize(args.resolution)?;
     
     println!("Generated {} particles.", particles.len());
 
