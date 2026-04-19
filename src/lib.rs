@@ -164,3 +164,28 @@ impl MeshProcessor {
         particles
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_from_file_unsupported_extension() {
+        let result = MeshProcessor::from_file("test.txt");
+        assert!(result.is_err());
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "Unsupported file format: txt"
+        );
+    }
+
+    #[test]
+    fn test_from_file_no_extension() {
+        let result = MeshProcessor::from_file("test");
+        assert!(result.is_err());
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "Unsupported file format: "
+        );
+    }
+}
