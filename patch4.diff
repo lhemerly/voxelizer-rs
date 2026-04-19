@@ -1,0 +1,20 @@
+--- src/lib.rs
++++ src/lib.rs
+@@ -112,8 +112,6 @@
+         let nx = (size.x / resolution).ceil() as u64;
+         let ny = (size.y / resolution).ceil() as u64;
+         let nz = (size.z / resolution).ceil() as u64;
+
+-        // We avoid collecting the entire yz cartesian product to save memory.
+-        // Instead we can use rayon's `into_par_iter` on a range or use flat_map across the ranges.
+         let particles: Vec<ParticleData> = (0..ny).into_par_iter().flat_map(|iy| {
+             (0..nz).into_par_iter().flat_map(move |iz| {
+@@ -149,8 +147,5 @@
+         }).collect();
+
+-        // let duration = start_time.elapsed();
+-        // println!("Voxelization complete in {:.2?}s", duration);
+-
+         particles
+     }
+ }

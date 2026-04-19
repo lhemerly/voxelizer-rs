@@ -45,7 +45,7 @@ impl MeshProcessor {
 
         let mesh = TriMesh::new(points, indices);
         let aabb = mesh.local_aabb();
-        
+
         let bounds_min = aabb.mins;
         let bounds_max = aabb.maxs;
 
@@ -61,7 +61,7 @@ impl MeshProcessor {
             path,
             &tobj::LoadOptions { triangulate: true, ..Default::default() }
         )?;
-        
+
         let mut all_points = Vec::new();
         let mut all_indices = Vec::new();
         let mut offset = 0;
@@ -90,23 +90,25 @@ impl MeshProcessor {
     fn load_stl(path: &str) -> Result<(Vec<Point<f64>>, Vec<[u32; 3]>)> {
         let mut file = File::open(path)?;
         let stl = stl_io::read_stl(&mut file)?;
-        
+
         let points: Vec<Point<f64>> = stl.vertices.iter()
             .map(|v| Point::new(v[0] as f64, v[1] as f64, v[2] as f64))
             .collect();
 
         let indices: Vec<[u32; 3]> = stl.faces.iter()
             .map(|f| [
-                f.vertices[0] as u32, 
-                f.vertices[1] as u32, 
+                f.vertices[0] as u32,
+                f.vertices[1] as u32,
                 f.vertices[2] as u32
             ])
             .collect();
-            
+
         Ok((points, indices))
     }
 
     pub fn voxelize(&self, resolution: f64) -> Vec<ParticleData> {
+        let start_time = std::time::Instant::now();
+
         let size = self.bounds_max - self.bounds_min;
         let nx = (size.x / resolution).ceil() as u64;
         let ny = (size.y / resolution).ceil() as u64;
@@ -137,7 +139,7 @@ impl MeshProcessor {
                     intersections += 1;
                     let hit_point = current_ray.point_at(hit.toi + 1e-4);
                     current_ray = Ray::new(hit_point, Vector::x());
-                    
+
                     if intersections > 20 { break; }
                 }
 
@@ -153,6 +155,9 @@ impl MeshProcessor {
             local_particles
             })
         }).collect();
+
+        let duration = start_time.elapsed();
+        println!("Voxelization complete in {:.2?}s", duration);
 
         particles
     }

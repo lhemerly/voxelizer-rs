@@ -1,0 +1,11 @@
+--- src/lib.rs
++++ src/lib.rs
+@@ -147,8 +145,5 @@
+         }).collect();
+
+-        // let duration = start_time.elapsed();
+-        // println!("Voxelization complete in {:.2?}s", duration);
+-
+         particles
+     }
+ }

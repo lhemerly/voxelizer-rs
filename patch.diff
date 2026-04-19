@@ -1,0 +1,23 @@
+--- src/lib.rs
++++ src/lib.rs
+@@ -113,8 +113,6 @@
+         let ny = (size.y / resolution).ceil() as u64;
+         let nz = (size.z / resolution).ceil() as u64;
+
+-        println!("Grid Dimensions: {} x {} x {} (Potential Voxels: {})", nx, ny, nz, nx*ny*nz);
+-
+         // We avoid collecting the entire yz cartesian product to save memory.
+         // Instead we can use rayon's `into_par_iter` on a range or use flat_map across the ranges.
+         let particles: Vec<ParticleData> = (0..ny).into_par_iter().flat_map(|iy| {
+-                let mut local_particles = Vec::with_capacity(nx as usize);
++                let mut local_particles = Vec::with_capacity(8);
+                 let y = self.bounds_min.y + (iy as f64 * resolution) + (resolution * 0.5);
+@@ -154,8 +152,5 @@
+         }).collect();
+
+-        let duration = start_time.elapsed();
+-        println!("Voxelization complete in {:.2?}s", duration);
+-
+         particles
+     }
+ }
