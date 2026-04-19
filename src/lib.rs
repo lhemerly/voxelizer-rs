@@ -170,38 +170,22 @@ mod tests {
     use std::env;
     use std::fs::File;
     use std::io::Write;
-    use std::process;
-    use std::sync::atomic::{AtomicU64, Ordering};
 
     fn get_temp_file_path(name: &str) -> String {
-        static TEMP_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
         let mut path = env::temp_dir();
-        let unique_id = TEMP_FILE_COUNTER.fetch_add(1, Ordering::Relaxed);
-        path.push(format!("test_mesh_{}_{}_{}", process::id(), unique_id, name));
-        path.to_string_lossy().into_owned()
-    }
-
-    /// RAII guard that deletes the file at the given path when dropped.
-    struct TempFile(String);
-
-    impl Drop for TempFile {
-        fn drop(&mut self) {
-            // Ignore errors: file may already be gone or we lack permissions;
-            // either way there is nothing useful to do inside a Drop impl.
-            let _ = std::fs::remove_file(&self.0);
-        }
+        path.push(format!("test_mesh_{}_{}", std::time::UNIX_EPOCH.elapsed().unwrap().as_nanos(), name));
+        path.to_str().unwrap().to_string()
     }
 
     #[test]
     fn test_from_file_obj() {
         let path = get_temp_file_path("test.obj");
-        let _guard = TempFile(path.clone());
-
         let mut file = File::create(&path).unwrap();
         writeln!(file, "v 0.0 0.0 0.0").unwrap();
         writeln!(file, "v 1.0 0.0 0.0").unwrap();
         writeln!(file, "v 0.0 1.0 0.0").unwrap();
         writeln!(file, "f 1 2 3").unwrap();
+        // Drop the file to flush and close
         drop(file);
 
         let processor_result = MeshProcessor::from_file(&path);
@@ -209,14 +193,15 @@ mod tests {
         let processor = processor_result.unwrap();
         assert_eq!(processor.bounds_min.x, 0.0);
         assert_eq!(processor.bounds_max.x, 1.0);
+
+        std::fs::remove_file(path).unwrap();
     }
 
     #[test]
     fn test_from_file_stl() {
         let path = get_temp_file_path("test.stl");
-        let _guard = TempFile(path.clone());
-
         let mut file = File::create(&path).unwrap();
+        // Write a simple ASCII STL
         writeln!(file, "solid test").unwrap();
         writeln!(file, "  facet normal 0.0 0.0 1.0").unwrap();
         writeln!(file, "    outer loop").unwrap();
@@ -230,45 +215,45 @@ mod tests {
 
         let processor_result = MeshProcessor::from_file(&path);
         assert!(processor_result.is_ok());
+
+        std::fs::remove_file(path).unwrap();
     }
 
     #[test]
     fn test_from_file_unsupported_extension() {
         let path = get_temp_file_path("test.txt");
-        let _guard = TempFile(path.clone());
-
         let mut file = File::create(&path).unwrap();
         writeln!(file, "dummy content").unwrap();
         drop(file);
 
         let result = MeshProcessor::from_file(&path);
         match result {
-            Err(e) => assert!(e.to_string().contains("Unsupported file format")),
+            Err(e) => assert_eq!(e.to_string(), "Unsupported file format: txt"),
             Ok(_) => panic!("Expected error, got Ok"),
         }
+
+        std::fs::remove_file(path).unwrap();
     }
 
     #[test]
     fn test_from_file_no_extension() {
         let path = get_temp_file_path("testfile_no_ext");
-        let _guard = TempFile(path.clone());
-
         let mut file = File::create(&path).unwrap();
         writeln!(file, "dummy content").unwrap();
         drop(file);
 
         let result = MeshProcessor::from_file(&path);
         match result {
-            Err(e) => assert!(e.to_string().contains("Unsupported file format")),
+            Err(e) => assert_eq!(e.to_string(), "Unsupported file format: "),
             Ok(_) => panic!("Expected error, got Ok"),
         }
+
+        std::fs::remove_file(path).unwrap();
     }
 
     #[test]
     fn test_from_file_non_existent() {
-        let path = get_temp_file_path("does_not_exist.obj");
-        // Do not create the file - just verify loading a missing file returns an error.
-        let result = MeshProcessor::from_file(&path);
+        let result = MeshProcessor::from_file("does_not_exist.obj");
         assert!(result.is_err());
     }
 }
