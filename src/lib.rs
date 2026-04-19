@@ -164,3 +164,96 @@ impl MeshProcessor {
         particles
     }
 }
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::env;
+    use std::fs::File;
+    use std::io::Write;
+
+    fn get_temp_file_path(name: &str) -> String {
+        let mut path = env::temp_dir();
+        path.push(format!("test_mesh_{}_{}", std::time::UNIX_EPOCH.elapsed().unwrap().as_nanos(), name));
+        path.to_str().unwrap().to_string()
+    }
+
+    #[test]
+    fn test_from_file_obj() {
+        let path = get_temp_file_path("test.obj");
+        let mut file = File::create(&path).unwrap();
+        writeln!(file, "v 0.0 0.0 0.0").unwrap();
+        writeln!(file, "v 1.0 0.0 0.0").unwrap();
+        writeln!(file, "v 0.0 1.0 0.0").unwrap();
+        writeln!(file, "f 1 2 3").unwrap();
+        // Drop the file to flush and close
+        drop(file);
+
+        let processor_result = MeshProcessor::from_file(&path);
+        assert!(processor_result.is_ok());
+        let processor = processor_result.unwrap();
+        assert_eq!(processor.bounds_min.x, 0.0);
+        assert_eq!(processor.bounds_max.x, 1.0);
+
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn test_from_file_stl() {
+        let path = get_temp_file_path("test.stl");
+        let mut file = File::create(&path).unwrap();
+        // Write a simple ASCII STL
+        writeln!(file, "solid test").unwrap();
+        writeln!(file, "  facet normal 0.0 0.0 1.0").unwrap();
+        writeln!(file, "    outer loop").unwrap();
+        writeln!(file, "      vertex 0.0 0.0 0.0").unwrap();
+        writeln!(file, "      vertex 1.0 0.0 0.0").unwrap();
+        writeln!(file, "      vertex 0.0 1.0 0.0").unwrap();
+        writeln!(file, "    endloop").unwrap();
+        writeln!(file, "  endfacet").unwrap();
+        writeln!(file, "endsolid test").unwrap();
+        drop(file);
+
+        let processor_result = MeshProcessor::from_file(&path);
+        assert!(processor_result.is_ok());
+
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn test_from_file_unsupported_extension() {
+        let path = get_temp_file_path("test.txt");
+        let mut file = File::create(&path).unwrap();
+        writeln!(file, "dummy content").unwrap();
+        drop(file);
+
+        let result = MeshProcessor::from_file(&path);
+        match result {
+            Err(e) => assert_eq!(e.to_string(), "Unsupported file format: txt"),
+            Ok(_) => panic!("Expected error, got Ok"),
+        }
+
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn test_from_file_no_extension() {
+        let path = get_temp_file_path("testfile_no_ext");
+        let mut file = File::create(&path).unwrap();
+        writeln!(file, "dummy content").unwrap();
+        drop(file);
+
+        let result = MeshProcessor::from_file(&path);
+        match result {
+            Err(e) => assert_eq!(e.to_string(), "Unsupported file format: "),
+            Ok(_) => panic!("Expected error, got Ok"),
+        }
+
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn test_from_file_non_existent() {
+        let result = MeshProcessor::from_file("does_not_exist.obj");
+        assert!(result.is_err());
+    }
+}
