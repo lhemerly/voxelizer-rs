@@ -5,3 +5,6 @@
 ## 2024-04-19 - Pre-allocating vectors within tight inner loops
 
 When Rayon `par_iter` spins up many small work units, frequent dynamic allocation of small `Vec`s (`Vec::new()`) in inner loops creates measurable overhead. By pre-allocating using `Vec::with_capacity(expected_len)`—especially when `expected_len` is statically known or easily bounded—we can reliably shave off ~5-6% of the execution time in performance-critical code paths without adding complexity.
+## 2026-04-18 - Pre-allocated Vector Capacity in `load_obj`
+**Learning:** Pre-calculating the total number of points and indices across all models in an OBJ file allows for using `Vec::with_capacity`. This optimization eliminates redundant reallocations and data copying as the vectors grow. For large meshes with numerous sub-models, this significantly reduces the "bookkeeping" overhead of dynamic arrays and minimizes memory fragmentation.
+**Action:** Always check if the final size of a collection can be determined (even with a quick pre-pass) before populating it, especially in performance-critical data loading paths. Rationale for implementation without benchmarking: Vector reallocations are a well-known bottleneck in Rust/C++ when dealing with large datasets, and pre-allocation is a standard best practice with guaranteed (though sometimes small) performance gains.

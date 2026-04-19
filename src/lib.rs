@@ -23,9 +23,6 @@ pub struct ParticleData {
     pub phase: u32,
 }
 
-unsafe impl Send for ParticleData {}
-unsafe impl Sync for ParticleData {}
-
 pub struct MeshProcessor {
     mesh: TriMesh,
     bounds_min: Point3<f64>,
@@ -62,8 +59,17 @@ impl MeshProcessor {
             &tobj::LoadOptions { triangulate: true, ..Default::default() }
         )?;
         
-        let mut all_points = Vec::new();
-        let mut all_indices = Vec::new();
+        // Pre-calculate capacities for all vertex positions and triangle faces to avoid
+        // multiple reallocations during vector growth, especially for large OBJ files.
+        let (total_points, total_faces) = models.iter().fold((0, 0), |acc, model| {
+            (
+                acc.0 + model.mesh.positions.len() / 3,
+                acc.1 + model.mesh.indices.len() / 3,
+            )
+        });
+
+        let mut all_points = Vec::with_capacity(total_points);
+        let mut all_indices = Vec::with_capacity(total_faces);
         let mut offset = 0;
 
         for model in models {
@@ -106,7 +112,11 @@ impl MeshProcessor {
         Ok((points, indices))
     }
 
-    pub fn voxelize(&self, resolution: f64) -> Vec<ParticleData> {
+    pub fn voxelize(&self, resolution: f64) -> Result<Vec<ParticleData>> {
+        if resolution <= 1e-6 {
+            anyhow::bail!("Resolution must be greater than 1e-6 to avoid excessive resource usage or division by zero. Provided: {}", resolution);
+        }
+
         let start_time = std::time::Instant::now();
         
         let size = self.bounds_max - self.bounds_min;
@@ -161,6 +171,78 @@ impl MeshProcessor {
         let duration = start_time.elapsed();
         println!("Voxelization complete in {:.2?}s", duration);
         
-        particles
+        Ok(particles)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_voxelize_invalid_resolution() {
+        let points = vec![
+            Point::new(0.0, 0.0, 0.0),
+            Point::new(1.0, 0.0, 0.0),
+            Point::new(0.0, 1.0, 0.0),
+        ];
+        let indices = vec![[0, 1, 2]];
+        let mesh = TriMesh::new(points, indices);
+        let bounds_min = Point3::new(0.0, 0.0, 0.0);
+        let bounds_max = Point3::new(1.0, 1.0, 1.0);
+        let processor = MeshProcessor { mesh, bounds_min, bounds_max };
+
+        assert!(processor.voxelize(0.0).is_err());
+        assert!(processor.voxelize(-1.0).is_err());
+        assert!(processor.voxelize(1e-7).is_err());
+        assert!(processor.voxelize(1e-5).is_ok());
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use parry3d::math::Point;
+
+    #[test]
+    fn test_voxelize_cube() {
+        let points = vec![
+            Point::new(0.0, 0.0, 0.0),
+            Point::new(1.0, 0.0, 0.0),
+            Point::new(1.0, 1.0, 0.0),
+            Point::new(0.0, 1.0, 0.0),
+            Point::new(0.0, 0.0, 1.0),
+            Point::new(1.0, 0.0, 1.0),
+            Point::new(1.0, 1.0, 1.0),
+            Point::new(0.0, 1.0, 1.0),
+        ];
+
+        let indices = vec![
+            [0, 1, 2], [0, 2, 3], // Front
+            [5, 4, 7], [5, 7, 6], // Back
+            [4, 5, 1], [4, 1, 0], // Bottom
+            [3, 2, 6], [3, 6, 7], // Top
+            [4, 0, 3], [4, 3, 7], // Left
+            [1, 5, 6], [1, 6, 2], // Right
+        ];
+
+        let mesh = TriMesh::new(points, indices);
+        let aabb = mesh.local_aabb();
+        let bounds_min = aabb.mins;
+        let bounds_max = aabb.maxs;
+
+        let processor = MeshProcessor {
+            mesh,
+            bounds_min,
+            bounds_max,
+        };
+
+        let particles = processor.voxelize(0.5);
+        assert_eq!(particles.len(), 8, "Expected 8 voxels for a 1x1x1 cube at 0.5 resolution");
+
+        for p in &particles {
+            assert!(p.x == 0.25 || p.x == 0.75);
+            assert!(p.y == 0.25 || p.y == 0.75);
+            assert!(p.z == 0.25 || p.z == 0.75);
+        }
     }
 }
