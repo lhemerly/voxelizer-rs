@@ -355,6 +355,8 @@ mod tests {
         drop(file);
 
         let err = MeshProcessor::from_file(&path)
+    fn test_from_file_unsupported_extension() {
+        let err = MeshProcessor::from_file("test.txt")
             .err()
             .expect("Expected an error for unsupported extension")
             .to_string();
@@ -377,5 +379,9 @@ mod tests {
     fn test_from_file_non_existent() {
         let result = MeshProcessor::from_file("does_not_exist.obj");
         assert!(result.is_err());
+        let err = MeshProcessor::from_file("test")
+            .err()
+            .expect("Expected an error for missing extension");
+        assert!(err.to_string().contains("Missing file extension"));
     }
 }
