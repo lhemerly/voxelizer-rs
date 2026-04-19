@@ -23,3 +23,10 @@ tobj = "4.0.3"
 [profile.dist]
 inherits = "release"
 lto = "thin"
+
+[dev-dependencies]
+criterion = "0.8.2"
+
+[[bench]]
+name = "voxelize_bench"
+harness = false

@@ -1,3 +1,7 @@
 ## 2026-02-18 - Scanline Optimization Reversion in `parry3d`
 **Learning:** Attempting to optimize `parry3d` raycasting by casting a single ray per line and counting intersection bounds to determine "inside" vs "outside" can fail when a mesh is un-closed, non-manifold, or has self-intersecting triangles (e.g. from generated STLs). The old logic raycasted exactly from the query point to determine `intersections % 2 != 0`. Caching intersections strictly across a scanline resulted in mismatched results compared to point-by-point raycasting. Additionally, reordering loops so X is inner and parallelizing over (Y, Z) is an effective performance boost on its own due to better spatial cache locality.
 **Action:** Be extremely cautious optimizing geometric intersection algorithms on 3D meshes without verifying 100% equivalence, as mesh anomalies are frequent. When raycasting along an axis, parallelize over the orthogonal axes to maximize both Rayon granularity and CPU cache locality for the inner loop.
+
+## 2024-04-19 - Pre-allocating vectors within tight inner loops
+
+When Rayon `par_iter` spins up many small work units, frequent dynamic allocation of small `Vec`s (`Vec::new()`) in inner loops creates measurable overhead. By pre-allocating using `Vec::with_capacity(expected_len)`—especially when `expected_len` is statically known or easily bounded—we can reliably shave off ~5-6% of the execution time in performance-critical code paths without adding complexity.
