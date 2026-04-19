@@ -55,7 +55,7 @@ impl MeshProcessor {
         })
     }
 
-    fn load_obj(path: &str) -> Result<(Vec<Point<f64>>, Vec<[u32; 3]>)> {
+    fn load_obj(path: &str) -> Result<MeshData> {
         let (models, _) = tobj::load_obj(
             path,
             &tobj::LoadOptions { triangulate: true, ..Default::default() }
@@ -76,28 +76,28 @@ impl MeshProcessor {
 
         for model in models {
             let mesh = model.mesh;
-            let pos_chunks = mesh.positions.chunks_exact(3);
-            if !pos_chunks.remainder().is_empty() {
+            if mesh.positions.len() % 3 != 0 {
                 anyhow::bail!(
-                    "OBJ positions length ({}) is not divisible by 3; malformed mesh data",
+                    "Model '{}' has a malformed positions array (length {} is not a multiple of 3)",
+                    model.name,
                     mesh.positions.len()
                 );
             }
-            for chunk in pos_chunks {
+            if mesh.indices.len() % 3 != 0 {
+                anyhow::bail!(
+                    "Model '{}' has a malformed indices array (length {} is not a multiple of 3)",
+                    model.name,
+                    mesh.indices.len()
+                );
+            }
+            for chunk in mesh.positions.chunks_exact(3) {
                 all_points.push(Point::new(
                     chunk[0] as f64,
                     chunk[1] as f64,
                     chunk[2] as f64,
                 ));
             }
-            let idx_chunks = mesh.indices.chunks_exact(3);
-            if !idx_chunks.remainder().is_empty() {
-                anyhow::bail!(
-                    "OBJ indices length ({}) is not divisible by 3; malformed mesh data",
-                    mesh.indices.len()
-                );
-            }
-            for chunk in idx_chunks {
+            for chunk in mesh.indices.chunks_exact(3) {
                 all_indices.push([
                     chunk[0] + offset,
                     chunk[1] + offset,
@@ -109,7 +109,7 @@ impl MeshProcessor {
         Ok((all_points, all_indices))
     }
 
-    fn load_stl(path: &str) -> Result<(Vec<Point<f64>>, Vec<[u32; 3]>)> {
+    fn load_stl(path: &str) -> Result<MeshData> {
         let mut file = File::open(path)?;
         let stl = stl_io::read_stl(&mut file)?;
         
