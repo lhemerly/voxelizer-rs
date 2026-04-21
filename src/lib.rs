@@ -1,8 +1,8 @@
 use anyhow::Result;
 use nalgebra::Point3;
-use parry3d::math::{Point, Vector};
-use parry3d::query::{Ray, RayCast};
-use parry3d::shape::TriMesh;
+use parry3d::math::{Isometry, Point, Vector};
+use parry3d::query::{Ray, RayCast, intersection_test};
+use parry3d::shape::{Cuboid, TriMesh};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::fs::File;
@@ -135,7 +135,7 @@ impl MeshProcessor {
         Ok((points, indices))
     }
 
-    pub fn voxelize(&self, resolution: f64) -> Result<Vec<ParticleData>> {
+    pub fn voxelize(&self, resolution: f64, surface_only: bool) -> Result<Vec<ParticleData>> {
         if resolution <= 1e-6 {
             anyhow::bail!(
                 "Resolution must be greater than 1e-6 to avoid excessive resource usage or division by zero. Provided: {}",
@@ -172,35 +172,59 @@ impl MeshProcessor {
                     // Because rays are cast along the +X direction, doing X sequentially
                     // keeps the raycast traversals in the same BVH region,
                     // while parallelizing over (Y, Z) ensures finer granularity for Rayon.
-                    for ix in 0..nx {
-                        let x = self.bounds_min.x + (ix as f64 * resolution) + (resolution * 0.5);
-                        let point = Point::new(x, y, z);
+                    if surface_only {
+                        let half_res = resolution * 0.5;
+                        let cuboid = Cuboid::new(Vector::new(half_res, half_res, half_res));
+                        let mesh_iso = Isometry::identity();
 
-                        let ray = Ray::new(point, Vector::x());
-                        let mut intersections = 0;
-                        let mut current_ray = ray;
-                        let max_dist = 1000.0;
+                        for ix in 0..nx {
+                            let x =
+                                self.bounds_min.x + (ix as f64 * resolution) + (resolution * 0.5);
+                            let point = Point::new(x, y, z);
+                            let voxel_iso = Isometry::translation(point.x, point.y, point.z);
 
-                        while let Some(hit) =
-                            self.mesh
-                                .cast_local_ray_and_get_normal(&current_ray, max_dist, true)
-                        {
-                            intersections += 1;
-                            let hit_point = current_ray.point_at(hit.toi + 1e-4);
-                            current_ray = Ray::new(hit_point, Vector::x());
-
-                            if intersections > 20 {
-                                break;
+                            if let Ok(true) =
+                                intersection_test(&mesh_iso, &self.mesh, &voxel_iso, &cuboid)
+                            {
+                                local_particles.push(ParticleData {
+                                    x: x as f32,
+                                    y: y as f32,
+                                    z: z as f32,
+                                    phase: 0,
+                                });
                             }
                         }
+                    } else {
+                        for ix in 0..nx {
+                            let x =
+                                self.bounds_min.x + (ix as f64 * resolution) + (resolution * 0.5);
+                            let point = Point::new(x, y, z);
 
-                        if intersections % 2 != 0 {
-                            local_particles.push(ParticleData {
-                                x: x as f32,
-                                y: y as f32,
-                                z: z as f32,
-                                phase: 0,
-                            });
+                            let ray = Ray::new(point, Vector::x());
+                            let mut intersections = 0;
+                            let mut current_ray = ray;
+                            let max_dist = 1000.0;
+
+                            while let Some(hit_toi) =
+                                self.mesh.cast_local_ray(&current_ray, max_dist, true)
+                            {
+                                intersections += 1;
+                                let hit_point = current_ray.point_at(hit_toi + 1e-4);
+                                current_ray = Ray::new(hit_point, Vector::x());
+
+                                if intersections > 20 {
+                                    break;
+                                }
+                            }
+
+                            if intersections % 2 != 0 {
+                                local_particles.push(ParticleData {
+                                    x: x as f32,
+                                    y: y as f32,
+                                    z: z as f32,
+                                    phase: 0,
+                                });
+                            }
                         }
                     }
                     local_particles
@@ -236,10 +260,10 @@ mod tests {
             bounds_max,
         };
 
-        assert!(processor.voxelize(0.0).is_err());
-        assert!(processor.voxelize(-1.0).is_err());
-        assert!(processor.voxelize(1e-7).is_err());
-        assert!(processor.voxelize(0.5).is_ok());
+        assert!(processor.voxelize(0.0, false).is_err());
+        assert!(processor.voxelize(-1.0, false).is_err());
+        assert!(processor.voxelize(1e-7, false).is_err());
+        assert!(processor.voxelize(0.5, false).is_ok());
     }
 
     #[test]
@@ -281,7 +305,7 @@ mod tests {
             bounds_max,
         };
 
-        let particles = processor.voxelize(0.5).unwrap();
+        let particles = processor.voxelize(0.5, false).unwrap();
         assert_eq!(
             particles.len(),
             8,

@@ -9,7 +9,9 @@ Uses rayon for multi-threaded ray-casting and grid search.
 
 ### Robust: Handles both .stl (binary/ascii) and .obj formats.
 
-### Simple Output: Exports to a compact binary format (.bin) optimized for GPU loading.
+### Multi-format Export: Outputs to PLY, CSV, or a compact binary (.bin) format depending on the file extension.
+
+### Surface and Solid Modes: Generate either a solid voxelized volume, or just a thin surface shell.
 
 ## Installation
 
@@ -27,9 +29,11 @@ Arguments:
 
 ``` -i, --input ```: Path to source mesh. 
 
-``` -o, --output ```: Path to destination binary.
+``` -o, --output ```: Path to destination file. The format is inferred from the extension (`.csv`, `.ply`, or `.bin`).
 
 ``` -r, --resolution ```: Voxel size in mesh units (default: 0.5).
+
+``` --surface-only ```: Optional flag. If provided, the output will only contain surface voxels instead of solid filling.
 
 ## Binary Format Specification
 
