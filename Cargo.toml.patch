@@ -1,0 +1,10 @@
+--- Cargo.toml
++++ Cargo.toml
+@@ -37,3 +37,7 @@
+ [[bench]]
+ name = "voxelize_bench"
+ harness = false
++
++[[bench]]
++name = "load_obj_bench"
++harness = false
