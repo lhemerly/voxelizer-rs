@@ -95,16 +95,21 @@ impl MeshProcessor {
                     mesh.indices.len()
                 );
             }
-            for chunk in mesh.positions.chunks_exact(3) {
-                all_points.push(Point::new(
+            // Use extend with iterators instead of repeated push calls.
+            // In Rust, Iterator::collect/extend allows the compiler and standard library to optimize
+            // bulk insertions (e.g. via lower level memcpy operations) much more efficiently than
+            // single-element pushes.
+            all_points.extend(mesh.positions.chunks_exact(3).map(|chunk| {
+                Point::new(
                     chunk[0] as f64,
                     chunk[1] as f64,
                     chunk[2] as f64,
-                ));
-            }
-            for chunk in mesh.indices.chunks_exact(3) {
-                all_indices.push([chunk[0] + offset, chunk[1] + offset, chunk[2] + offset]);
-            }
+                )
+            }));
+
+            all_indices.extend(mesh.indices.chunks_exact(3).map(|chunk| {
+                [chunk[0] + offset, chunk[1] + offset, chunk[2] + offset]
+            }));
             offset += (mesh.positions.len() / 3) as u32;
         }
         Ok((all_points, all_indices))
