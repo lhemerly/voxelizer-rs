@@ -2,7 +2,7 @@ use clap::Parser;
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::Path;
-use voxelizer_rs::{MeshProcessor, ParticleHeader};
+use voxelizer_rs::{MeshProcessor, ParticleHeader, TransformConfig};
 
 #[derive(Parser, Debug)]
 #[command(author, version, about = "Voxelizer")]
@@ -18,6 +18,35 @@ struct Args {
 
     #[arg(long)]
     surface_only: bool,
+
+    #[arg(long, default_value_t = 1.0)]
+    scale: f64,
+
+    #[arg(long)]
+    center: bool,
+
+    #[arg(long, value_parser = parse_vec3)]
+    translate: Option<[f64; 3]>,
+
+    #[arg(long)]
+    threads: Option<usize>,
+}
+
+fn parse_vec3(s: &str) -> Result<[f64; 3], String> {
+    let parts: Vec<&str> = s.split(',').collect();
+    if parts.len() != 3 {
+        return Err(format!("Expected 'x,y,z', got '{}'", s));
+    }
+    let x = parts[0]
+        .parse()
+        .map_err(|_| format!("Invalid x: {}", parts[0]))?;
+    let y = parts[1]
+        .parse()
+        .map_err(|_| format!("Invalid y: {}", parts[1]))?;
+    let z = parts[2]
+        .parse()
+        .map_err(|_| format!("Invalid z: {}", parts[2]))?;
+    Ok([x, y, z])
 }
 
 fn validate_resolution(s: &str) -> Result<f64, String> {
@@ -34,10 +63,23 @@ fn validate_resolution(s: &str) -> Result<f64, String> {
 fn main() -> anyhow::Result<()> {
     let args = Args::parse();
 
+    if let Some(threads) = args.threads {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(threads)
+            .build_global()
+            .map_err(|e| anyhow::anyhow!("Failed to configure thread pool: {}", e))?;
+    }
+
     println!("Input: {}", args.input);
     println!("Resolution: {} mm", args.resolution);
 
-    let processor = MeshProcessor::from_file(&args.input)?;
+    let transform = TransformConfig {
+        scale: args.scale,
+        center: args.center,
+        translate: args.translate,
+    };
+
+    let processor = MeshProcessor::from_file(&args.input, &transform)?;
     let particles = processor.voxelize(args.resolution, args.surface_only)?;
 
     println!("Generated {} particles.", particles.len());

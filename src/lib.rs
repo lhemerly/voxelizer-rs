@@ -25,6 +25,23 @@ pub struct ParticleData {
 
 type MeshData = (Vec<Point<f64>>, Vec<[u32; 3]>);
 
+#[derive(Debug, Clone, Copy)]
+pub struct TransformConfig {
+    pub scale: f64,
+    pub center: bool,
+    pub translate: Option<[f64; 3]>,
+}
+
+impl Default for TransformConfig {
+    fn default() -> Self {
+        Self {
+            scale: 1.0,
+            center: false,
+            translate: None,
+        }
+    }
+}
+
 pub struct MeshProcessor {
     mesh: TriMesh,
     bounds_min: Point3<f64>,
@@ -32,17 +49,56 @@ pub struct MeshProcessor {
 }
 
 impl MeshProcessor {
-    pub fn from_file(path: &str) -> Result<Self> {
+    pub fn from_file(path: &str, transform: &TransformConfig) -> Result<Self> {
         let path_obj = Path::new(path);
         let extension = path_obj.extension().and_then(|s| s.to_str());
         let ext_lower = extension.map(|e| e.to_lowercase());
 
-        let (points, indices) = match ext_lower.as_deref() {
+        let (mut points, indices) = match ext_lower.as_deref() {
             Some("obj") => Self::load_obj(path)?,
             Some("stl") => Self::load_stl(path)?,
             Some(ext) => anyhow::bail!("Unsupported file format: {}", ext),
             None => anyhow::bail!("Missing file extension"),
         };
+
+        if transform.center {
+            let mut min = Point3::new(f64::MAX, f64::MAX, f64::MAX);
+            let mut max = Point3::new(f64::MIN, f64::MIN, f64::MIN);
+            for p in &points {
+                min.x = min.x.min(p.x);
+                min.y = min.y.min(p.y);
+                min.z = min.z.min(p.z);
+                max.x = max.x.max(p.x);
+                max.y = max.y.max(p.y);
+                max.z = max.z.max(p.z);
+            }
+            let center = Point3::new(
+                (min.x + max.x) * 0.5,
+                (min.y + max.y) * 0.5,
+                (min.z + max.z) * 0.5,
+            );
+            for p in &mut points {
+                p.x -= center.x;
+                p.y -= center.y;
+                p.z -= center.z;
+            }
+        }
+
+        if (transform.scale - 1.0).abs() > f64::EPSILON {
+            for p in &mut points {
+                p.x *= transform.scale;
+                p.y *= transform.scale;
+                p.z *= transform.scale;
+            }
+        }
+
+        if let Some(t) = transform.translate {
+            for p in &mut points {
+                p.x += t[0];
+                p.y += t[1];
+                p.z += t[2];
+            }
+        }
 
         let mesh = TriMesh::new(points, indices);
         let aabb = mesh.local_aabb();
@@ -321,7 +377,7 @@ mod tests {
 
     #[test]
     fn test_from_file_unsupported_extension() {
-        let err = MeshProcessor::from_file("test.txt")
+        let err = MeshProcessor::from_file("test.txt", &TransformConfig::default())
             .err()
             .expect("Expected an error for unsupported extension")
             .to_string();
@@ -331,9 +387,123 @@ mod tests {
 
     #[test]
     fn test_from_file_no_extension() {
-        let err = MeshProcessor::from_file("test")
+        let err = MeshProcessor::from_file("test", &TransformConfig::default())
             .err()
             .expect("Expected an error for missing extension");
         assert!(err.to_string().contains("Missing file extension"));
+    }
+
+    #[test]
+    fn test_transform_scale() {
+        let temp_dir = std::env::temp_dir();
+        let file_path = temp_dir.join(format!(
+            "test_scale_{}.stl",
+            std::time::UNIX_EPOCH.elapsed().unwrap().as_nanos()
+        ));
+
+        let faces = vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]];
+
+        let mut f = std::fs::File::create(&file_path).unwrap();
+        use std::io::Write;
+        f.write_all(&[0; 80]).unwrap();
+        f.write_all(&1u32.to_le_bytes()).unwrap();
+        f.write_all(&[0; 12]).unwrap();
+        for v in &faces {
+            for c in v {
+                f.write_all(&(*c as f32).to_le_bytes()).unwrap();
+            }
+        }
+        f.write_all(&[0; 2]).unwrap();
+
+        let config = TransformConfig {
+            scale: 2.0,
+            ..Default::default()
+        };
+
+        let processor = MeshProcessor::from_file(file_path.to_str().unwrap(), &config).unwrap();
+
+        assert_eq!(processor.bounds_min.x, 0.0);
+        assert_eq!(processor.bounds_max.x, 2.0);
+        assert_eq!(processor.bounds_max.y, 2.0);
+
+        std::fs::remove_file(file_path).unwrap();
+    }
+
+    #[test]
+    fn test_transform_center() {
+        let temp_dir = std::env::temp_dir();
+        let file_path = temp_dir.join(format!(
+            "test_center_{}.stl",
+            std::time::UNIX_EPOCH.elapsed().unwrap().as_nanos()
+        ));
+
+        let faces = vec![[1.0, 1.0, 1.0], [3.0, 1.0, 1.0], [1.0, 3.0, 1.0]];
+
+        let mut f = std::fs::File::create(&file_path).unwrap();
+        use std::io::Write;
+        f.write_all(&[0; 80]).unwrap();
+        f.write_all(&1u32.to_le_bytes()).unwrap();
+        f.write_all(&[0; 12]).unwrap();
+        for v in &faces {
+            for c in v {
+                f.write_all(&(*c as f32).to_le_bytes()).unwrap();
+            }
+        }
+        f.write_all(&[0; 2]).unwrap();
+
+        let config = TransformConfig {
+            center: true,
+            ..Default::default()
+        };
+
+        let processor = MeshProcessor::from_file(file_path.to_str().unwrap(), &config).unwrap();
+
+        assert_eq!(processor.bounds_min.x, -1.0);
+        assert_eq!(processor.bounds_max.x, 1.0);
+        assert_eq!(processor.bounds_min.y, -1.0);
+        assert_eq!(processor.bounds_max.y, 1.0);
+        assert_eq!(processor.bounds_min.z, 0.0);
+        assert_eq!(processor.bounds_max.z, 0.0);
+
+        std::fs::remove_file(file_path).unwrap();
+    }
+
+    #[test]
+    fn test_transform_translate() {
+        let temp_dir = std::env::temp_dir();
+        let file_path = temp_dir.join(format!(
+            "test_translate_{}.stl",
+            std::time::UNIX_EPOCH.elapsed().unwrap().as_nanos()
+        ));
+
+        let faces = vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]];
+
+        let mut f = std::fs::File::create(&file_path).unwrap();
+        use std::io::Write;
+        f.write_all(&[0; 80]).unwrap();
+        f.write_all(&1u32.to_le_bytes()).unwrap();
+        f.write_all(&[0; 12]).unwrap();
+        for v in &faces {
+            for c in v {
+                f.write_all(&(*c as f32).to_le_bytes()).unwrap();
+            }
+        }
+        f.write_all(&[0; 2]).unwrap();
+
+        let config = TransformConfig {
+            translate: Some([10.0, 20.0, 30.0]),
+            ..Default::default()
+        };
+
+        let processor = MeshProcessor::from_file(file_path.to_str().unwrap(), &config).unwrap();
+
+        assert_eq!(processor.bounds_min.x, 10.0);
+        assert_eq!(processor.bounds_max.x, 11.0);
+        assert_eq!(processor.bounds_min.y, 20.0);
+        assert_eq!(processor.bounds_max.y, 21.0);
+        assert_eq!(processor.bounds_min.z, 30.0);
+        assert_eq!(processor.bounds_max.z, 30.0);
+
+        std::fs::remove_file(file_path).unwrap();
     }
 }
