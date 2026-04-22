@@ -195,29 +195,43 @@ impl MeshProcessor {
                             }
                         }
                     } else {
+                        // Cast a single ray along +X from outside the bounding box
+                        let start_x = self.bounds_min.x - 1.0;
+                        let point = Point::new(start_x, y, z);
+                        let ray = Ray::new(point, Vector::x());
+                        let mut current_ray = ray;
+                        let max_dist = (self.bounds_max.x - start_x) + 1.0;
+
+                        let mut hit_xs = Vec::new();
+                        while let Some(hit_toi) =
+                            self.mesh.cast_local_ray(&current_ray, max_dist, true)
+                        {
+                            let hit_point = current_ray.point_at(hit_toi);
+                            hit_xs.push(hit_point.x);
+
+                            // Advance ray slightly past the intersection to find the next one
+                            current_ray =
+                                Ray::new(current_ray.point_at(hit_toi + 1e-4), Vector::x());
+
+                            if hit_xs.len() > 50 {
+                                break; // Prevent infinite loops in degenerate cases
+                            }
+                        }
+
+                        // Sort intersections just in case precision issues caused out-of-order results
+                        hit_xs
+                            .sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+
                         for ix in 0..nx {
                             let x =
                                 self.bounds_min.x + (ix as f64 * resolution) + (resolution * 0.5);
-                            let point = Point::new(x, y, z);
 
-                            let ray = Ray::new(point, Vector::x());
-                            let mut intersections = 0;
-                            let mut current_ray = ray;
-                            let max_dist = 1000.0;
+                            // A point is inside if it has an odd number of intersections to its right (or left).
+                            // Let's count intersections with X > x.
+                            let intersections_to_right =
+                                hit_xs.iter().filter(|&&hx| hx > x).count();
 
-                            while let Some(hit_toi) =
-                                self.mesh.cast_local_ray(&current_ray, max_dist, true)
-                            {
-                                intersections += 1;
-                                let hit_point = current_ray.point_at(hit_toi + 1e-4);
-                                current_ray = Ray::new(hit_point, Vector::x());
-
-                                if intersections > 20 {
-                                    break;
-                                }
-                            }
-
-                            if intersections % 2 != 0 {
+                            if intersections_to_right % 2 != 0 {
                                 local_particles.push(ParticleData {
                                     x: x as f32,
                                     y: y as f32,
