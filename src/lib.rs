@@ -264,7 +264,10 @@ mod tests {
             let err = processor.voxelize(res, false).err().unwrap().to_string();
             assert_eq!(
                 err,
-                format!("Resolution must be a finite number greater than 1e-6 to avoid excessive resource usage or division by zero. Provided: {}", res)
+                format!(
+                    "Resolution must be a finite number greater than 1e-6 to avoid excessive resource usage or division by zero. Provided: {}",
+                    res
+                )
             );
         };
 
