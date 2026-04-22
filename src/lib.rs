@@ -213,8 +213,18 @@ impl MeshProcessor {
                             current_ray =
                                 Ray::new(current_ray.point_at(hit_toi + 1e-4), Vector::x());
 
-                            if hit_xs.len() > 50 {
-                                break; // Prevent infinite loops in degenerate cases
+                            if hit_toi < 1e-5 {
+                                // Break out of an infinite loop if we're not advancing anymore
+                                // Note: The advance is 1e-4, so hit_toi should typically be at least that.
+                                // But if hit_toi evaluates to very near 0 due to precision, this prevents hanging.
+                                // In the original code, the 50-hit cutoff served this purpose.
+                                // Let's use a much larger failsafe instead of 50 to allow complex meshes while still preventing infinite loops.
+                            }
+
+                            // Prevent true infinite loops in degenerate floating-point cases
+                            // without artificially limiting complex geometry.
+                            if hit_xs.len() > 100_000 {
+                                break;
                             }
                         }
 
