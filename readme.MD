@@ -35,6 +35,14 @@ Arguments:
 
 ``` --surface-only ```: Optional flag. If provided, the output will only contain surface voxels instead of solid filling.
 
+``` --scale ```: Scale multiplier for the mesh dimensions (default: 1.0).
+
+``` --center ```: Optional flag. If provided, the mesh will be centered at the origin (0, 0, 0) before processing.
+
+``` --translate ```: Translates the mesh by 'x,y,z' offsets (e.g., `--translate 10,-5,0`).
+
+``` --threads ```: Number of parallel threads to use. Defaults to the system's logical core count.
+
 ## Binary Format Specification
 
 The output file uses a compact custom binary format serialized via ```bincode```.
