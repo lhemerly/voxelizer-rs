@@ -136,9 +136,9 @@ impl MeshProcessor {
     }
 
     pub fn voxelize(&self, resolution: f64, surface_only: bool) -> Result<Vec<ParticleData>> {
-        if resolution <= 1e-6 {
+        if !resolution.is_finite() || resolution <= 1e-6 {
             anyhow::bail!(
-                "Resolution must be greater than 1e-6 to avoid excessive resource usage or division by zero. Provided: {}",
+                "Resolution must be a finite number greater than 1e-6 to avoid excessive resource usage or division by zero. Provided: {}",
                 resolution
             );
         }
@@ -260,9 +260,20 @@ mod tests {
             bounds_max,
         };
 
-        assert!(processor.voxelize(0.0, false).is_err());
-        assert!(processor.voxelize(-1.0, false).is_err());
-        assert!(processor.voxelize(1e-7, false).is_err());
+        let check_err = |res: f64| {
+            let err = processor.voxelize(res, false).err().unwrap().to_string();
+            assert_eq!(
+                err,
+                format!("Resolution must be a finite number greater than 1e-6 to avoid excessive resource usage or division by zero. Provided: {}", res)
+            );
+        };
+
+        check_err(0.0);
+        check_err(-1.0);
+        check_err(1e-7);
+        check_err(std::f64::NAN);
+        check_err(std::f64::INFINITY);
+
         assert!(processor.voxelize(0.5, false).is_ok());
     }
 
