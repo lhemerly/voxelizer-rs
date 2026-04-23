@@ -1,7 +1,7 @@
 use anyhow::Result;
 use nalgebra::Point3;
 use parry3d::math::{Isometry, Point, Vector};
-use parry3d::query::{Ray, RayCast, intersection_test};
+use parry3d::query::{PointQuery, Ray, RayCast, intersection_test};
 use parry3d::shape::{Cuboid, TriMesh};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -20,7 +20,11 @@ pub struct ParticleData {
     pub x: f32,
     pub y: f32,
     pub z: f32,
+    pub sdf: f32,
     pub phase: u32,
+    pub label_id: u32,
+    pub fiber_x: f32,
+    pub fiber_y: f32,
 }
 
 type MeshData = (Vec<Point<f64>>, Vec<[u32; 3]>);
@@ -246,6 +250,7 @@ impl MeshProcessor {
         &self,
         resolution: f64,
         surface_only: bool,
+        narrow_band: Option<f64>,
         phase_sphere: Option<[f64; 4]>,
     ) -> Result<Vec<ParticleData>> {
         if resolution <= 1e-6 {
@@ -298,22 +303,40 @@ impl MeshProcessor {
                             if let Ok(true) =
                                 intersection_test(&mesh_iso, &self.mesh, &voxel_iso, &cuboid)
                             {
-                                let mut phase = 0;
-                                if let Some(sphere) = phase_sphere {
-                                    let dx = x - sphere[0];
-                                    let dy = y - sphere[1];
-                                    let dz = z - sphere[2];
-                                    let r2 = sphere[3] * sphere[3];
-                                    if dx * dx + dy * dy + dz * dz <= r2 {
-                                        phase = 1;
+                                let distance =
+                                    self.mesh.distance_to_local_point(&point, false) as f32;
+                                let sdf = distance; // Because it intersects the surface, magnitude is distance. Inside/outside sign isn't defined here but we just use distance
+
+                                // Surface voxels inherently intersect the surface, so they should always be kept
+                                // if we're not using narrow_band. If narrow_band is used, we check the distance.
+                                let keep = if let Some(band) = narrow_band {
+                                    sdf.abs() <= band as f32
+                                } else {
+                                    true
+                                };
+
+                                if keep {
+                                    let mut phase = 0;
+                                    if let Some(sphere) = phase_sphere {
+                                        let dx = x - sphere[0];
+                                        let dy = y - sphere[1];
+                                        let dz = z - sphere[2];
+                                        let r2 = sphere[3] * sphere[3];
+                                        if dx * dx + dy * dy + dz * dz <= r2 {
+                                            phase = 1;
+                                        }
                                     }
+                                    local_particles.push(ParticleData {
+                                        x: x as f32,
+                                        y: y as f32,
+                                        z: z as f32,
+                                        sdf,
+                                        phase,
+                                        label_id: 0,
+                                        fiber_x: 0.0,
+                                        fiber_y: 0.0,
+                                    });
                                 }
-                                local_particles.push(ParticleData {
-                                    x: x as f32,
-                                    y: y as f32,
-                                    z: z as f32,
-                                    phase,
-                                });
                             }
                         }
                     } else {
@@ -357,13 +380,26 @@ impl MeshProcessor {
                         for ix in 0..nx {
                             let x =
                                 self.bounds_min.x + (ix as f64 * resolution) + (resolution * 0.5);
+                            let point_3d = Point::new(x, y, z);
 
                             // A point is inside if it has an odd number of intersections to its right (or left).
-                            // Let's count intersections with X > x.
+                            // hit_xs is sorted, so we can use partition_point for O(log N) lookup.
                             let intersections_to_right =
-                                hit_xs.iter().filter(|&&hx| hx > x).count();
+                                hit_xs.len() - hit_xs.partition_point(|&hx| hx <= x);
 
-                            if intersections_to_right % 2 != 0 {
+                            let is_inside = intersections_to_right % 2 != 0;
+
+                            let distance =
+                                self.mesh.distance_to_local_point(&point_3d, false) as f32;
+                            let sdf = if is_inside { -distance } else { distance };
+
+                            let keep = if let Some(band) = narrow_band {
+                                sdf.abs() <= band as f32
+                            } else {
+                                sdf <= 0.0
+                            };
+
+                            if keep {
                                 let mut phase = 0;
                                 if let Some(sphere) = phase_sphere {
                                     let dx = x - sphere[0];
@@ -378,7 +414,11 @@ impl MeshProcessor {
                                     x: x as f32,
                                     y: y as f32,
                                     z: z as f32,
+                                    sdf,
                                     phase,
+                                    label_id: 0,
+                                    fiber_x: 0.0,
+                                    fiber_y: 0.0,
                                 });
                             }
                         }
@@ -416,10 +456,10 @@ mod tests {
             bounds_max,
         };
 
-        assert!(processor.voxelize(0.0, false, None).is_err());
-        assert!(processor.voxelize(-1.0, false, None).is_err());
-        assert!(processor.voxelize(1e-7, false, None).is_err());
-        assert!(processor.voxelize(0.5, false, None).is_ok());
+        assert!(processor.voxelize(0.0, false, None, None).is_err());
+        assert!(processor.voxelize(-1.0, false, None, None).is_err());
+        assert!(processor.voxelize(1e-7, false, None, None).is_err());
+        assert!(processor.voxelize(0.5, false, None, None).is_ok());
     }
 
     #[test]
@@ -461,7 +501,7 @@ mod tests {
             bounds_max,
         };
 
-        let particles = processor.voxelize(0.5, false, None).unwrap();
+        let particles = processor.voxelize(0.5, false, None, None).unwrap();
         assert_eq!(
             particles.len(),
             8,
