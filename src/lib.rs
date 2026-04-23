@@ -293,9 +293,10 @@ impl MeshProcessor {
                                 self.bounds_min.x + (ix as f64 * resolution) + (resolution * 0.5);
 
                             // A point is inside if it has an odd number of intersections to its right (or left).
-                            // Let's count intersections with X > x.
+                            // Since hit_xs is sorted, we can use binary search (`partition_point`) to optimize
+                            // the intersection count from O(N) to O(log N) per voxel.
                             let intersections_to_right =
-                                hit_xs.iter().filter(|&&hx| hx > x).count();
+                                hit_xs.len() - hit_xs.partition_point(|&hx| hx <= x);
 
                             if intersections_to_right % 2 != 0 {
                                 local_particles.push(ParticleData {
