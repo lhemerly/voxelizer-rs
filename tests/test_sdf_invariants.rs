@@ -93,10 +93,10 @@ fn test_sdf_invariants() {
         }
 
         // Exactly on the boundary (approx)
-        if (dist_to_center - radius as f32).abs() < resolution as f32 {
-            if p.sdf.abs() < boundary_sdf.abs() {
-                boundary_sdf = p.sdf;
-            }
+        if (dist_to_center - radius as f32).abs() < resolution as f32
+            && p.sdf.abs() < boundary_sdf.abs()
+        {
+            boundary_sdf = p.sdf;
         }
 
         // At 2R
@@ -104,10 +104,8 @@ fn test_sdf_invariants() {
         // we might not find an outside point exactly correctly with distance to degenerate triangles.
         // Let's just grab the max SDF we can find, it should be at least R and at most 1.5R
         // since the grid bounds are around 2.5R but corner points have degenerate triangles.
-        if p.sdf > 0.0 && p.sdf < 15.0 {
-            if outside_sdf == f32::MAX || p.sdf > outside_sdf {
-                outside_sdf = p.sdf;
-            }
+        if p.sdf > 0.0 && p.sdf < 15.0 && (outside_sdf == f32::MAX || p.sdf > outside_sdf) {
+            outside_sdf = p.sdf;
         }
     }
 

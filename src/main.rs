@@ -208,7 +208,7 @@ fn main() -> anyhow::Result<()> {
         _ => {
             // Default to BIN
             let header = ParticleHeader {
-                version: 1,
+                version: 2,
                 particle_count: particles.len() as u64,
                 resolution: args.resolution,
             };
