@@ -21,6 +21,7 @@ pub struct ParticleData {
     pub y: f32,
     pub z: f32,
     pub phase: u32,
+    pub sdf: f32,
 }
 
 type MeshData = (Vec<Point<f64>>, Vec<[u32; 3]>);
@@ -242,11 +243,14 @@ impl MeshProcessor {
                             if let Ok(true) =
                                 intersection_test(&mesh_iso, &self.mesh, &voxel_iso, &cuboid)
                             {
+                                use parry3d::query::PointQuery;
+                                let dist = self.mesh.distance_to_local_point(&point, true);
                                 local_particles.push(ParticleData {
                                     x: x as f32,
                                     y: y as f32,
                                     z: z as f32,
                                     phase: 0,
+                                    sdf: dist as f32,
                                 });
                             }
                         }
@@ -298,11 +302,15 @@ impl MeshProcessor {
                                 hit_xs.iter().filter(|&&hx| hx > x).count();
 
                             if intersections_to_right % 2 != 0 {
+                                use parry3d::query::PointQuery;
+                                let p = Point::new(x, y, z);
+                                let dist = self.mesh.distance_to_local_point(&p, true);
                                 local_particles.push(ParticleData {
                                     x: x as f32,
                                     y: y as f32,
                                     z: z as f32,
                                     phase: 0,
+                                    sdf: -dist as f32,
                                 });
                             }
                         }
