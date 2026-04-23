@@ -7,7 +7,7 @@ fn bench_voxelize(c: &mut Criterion) {
         MeshProcessor::from_file("tests/data/cube.obj", &TransformConfig::default()).unwrap();
 
     c.bench_function("voxelize", |b| {
-        b.iter(|| mesh_processor.voxelize(black_box(0.1), false));
+        b.iter(|| mesh_processor.voxelize(black_box(0.1), false, None));
     });
 }
 
