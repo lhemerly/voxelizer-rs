@@ -1,7 +1,7 @@
 use anyhow::Result;
 use nalgebra::Point3;
 use parry3d::math::{Isometry, Point, Vector};
-use parry3d::query::{Ray, RayCast, intersection_test};
+use parry3d::query::{PointQuery, Ray, RayCast, intersection_test};
 use parry3d::shape::{Cuboid, TriMesh};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -20,7 +20,11 @@ pub struct ParticleData {
     pub x: f32,
     pub y: f32,
     pub z: f32,
+    pub sdf: f32,
     pub phase: u32,
+    pub label_id: u32,
+    pub fiber_x: f32,
+    pub fiber_y: f32,
 }
 
 type MeshData = (Vec<Point<f64>>, Vec<[u32; 3]>);
@@ -246,6 +250,7 @@ impl MeshProcessor {
         &self,
         resolution: f64,
         surface_only: bool,
+        narrow_band: Option<f64>,
         phase_sphere: Option<[f64; 4]>,
     ) -> Result<Vec<ParticleData>> {
         if resolution <= 1e-6 {
@@ -257,7 +262,21 @@ impl MeshProcessor {
 
         let start_time = std::time::Instant::now();
 
-        let size = self.bounds_max - self.bounds_min;
+        let mut bounds_min = self.bounds_min;
+        let mut bounds_max = self.bounds_max;
+
+        if let Some(band) = narrow_band {
+            // Expand the evaluation bounds by the narrow_band to ensure we capture
+            // exterior voxels in the required shell.
+            bounds_min.x -= band;
+            bounds_min.y -= band;
+            bounds_min.z -= band;
+            bounds_max.x += band;
+            bounds_max.y += band;
+            bounds_max.z += band;
+        }
+
+        let size = bounds_max - bounds_min;
         let nx = (size.x / resolution).ceil() as u64;
         let ny = (size.y / resolution).ceil() as u64;
         let nz = (size.z / resolution).ceil() as u64;
@@ -277,8 +296,31 @@ impl MeshProcessor {
             .flat_map(|iy| {
                 (0..nz).into_par_iter().flat_map(move |iz| {
                     let mut local_particles = Vec::with_capacity(nx as usize);
-                    let y = self.bounds_min.y + (iy as f64 * resolution) + (resolution * 0.5);
-                    let z = self.bounds_min.z + (iz as f64 * resolution) + (resolution * 0.5);
+                    let y = bounds_min.y + (iy as f64 * resolution) + (resolution * 0.5);
+                    let z = bounds_min.z + (iz as f64 * resolution) + (resolution * 0.5);
+
+                    // Extract raycasting to be available for both modes so SDF sign is consistent.
+                    let start_x = self.bounds_min.x - 1.0;
+                    let ray_point = Point::new(start_x, y, z);
+                    let ray = Ray::new(ray_point, Vector::x());
+                    let mut current_ray = ray;
+                    let max_dist = (bounds_max.x.max(self.bounds_max.x) - start_x) + 1.0;
+
+                    let mut hit_xs = Vec::new();
+                    while let Some(hit_toi) = self.mesh.cast_local_ray(&current_ray, max_dist, true)
+                    {
+                        let hit_point = current_ray.point_at(hit_toi);
+                        hit_xs.push(hit_point.x);
+
+                        current_ray = Ray::new(current_ray.point_at(hit_toi + 1e-4), Vector::x());
+
+                        if hit_xs.len() > 100_000 {
+                            break;
+                        }
+                    }
+
+                    // Sort intersections just in case precision issues caused out-of-order results
+                    hit_xs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
 
                     // Iterate over X in the inner loop to optimize spatial cache locality.
                     // Because rays are cast along the +X direction, doing X sequentially
@@ -290,80 +332,76 @@ impl MeshProcessor {
                         let mesh_iso = Isometry::identity();
 
                         for ix in 0..nx {
-                            let x =
-                                self.bounds_min.x + (ix as f64 * resolution) + (resolution * 0.5);
+                            let x = bounds_min.x + (ix as f64 * resolution) + (resolution * 0.5);
                             let point = Point::new(x, y, z);
                             let voxel_iso = Isometry::translation(point.x, point.y, point.z);
 
                             if let Ok(true) =
                                 intersection_test(&mesh_iso, &self.mesh, &voxel_iso, &cuboid)
                             {
-                                let mut phase = 0;
-                                if let Some(sphere) = phase_sphere {
-                                    let dx = x - sphere[0];
-                                    let dy = y - sphere[1];
-                                    let dz = z - sphere[2];
-                                    let r2 = sphere[3] * sphere[3];
-                                    if dx * dx + dy * dy + dz * dz <= r2 {
-                                        phase = 1;
+                                let intersections_to_right =
+                                    hit_xs.len() - hit_xs.partition_point(|&hx| hx <= x);
+                                let is_inside = intersections_to_right % 2 != 0;
+
+                                let distance =
+                                    self.mesh.distance_to_local_point(&point, false) as f32;
+                                let sdf = if is_inside { -distance } else { distance };
+
+                                // Surface voxels inherently intersect the surface, so they should always be kept
+                                // if we're not using narrow_band. If narrow_band is used, we check the distance.
+                                let keep = if let Some(band) = narrow_band {
+                                    sdf.abs() <= band as f32
+                                } else {
+                                    true
+                                };
+
+                                if keep {
+                                    let mut phase = 0;
+                                    if let Some(sphere) = phase_sphere {
+                                        let dx = x - sphere[0];
+                                        let dy = y - sphere[1];
+                                        let dz = z - sphere[2];
+                                        let r2 = sphere[3] * sphere[3];
+                                        if dx * dx + dy * dy + dz * dz <= r2 {
+                                            phase = 1;
+                                        }
                                     }
+                                    local_particles.push(ParticleData {
+                                        x: x as f32,
+                                        y: y as f32,
+                                        z: z as f32,
+                                        sdf,
+                                        phase,
+                                        label_id: 0,
+                                        fiber_x: 0.0,
+                                        fiber_y: 0.0,
+                                    });
                                 }
-                                local_particles.push(ParticleData {
-                                    x: x as f32,
-                                    y: y as f32,
-                                    z: z as f32,
-                                    phase,
-                                });
                             }
                         }
                     } else {
-                        // Cast a single ray along +X from outside the bounding box
-                        let start_x = self.bounds_min.x - 1.0;
-                        let point = Point::new(start_x, y, z);
-                        let ray = Ray::new(point, Vector::x());
-                        let mut current_ray = ray;
-                        let max_dist = (self.bounds_max.x - start_x) + 1.0;
-
-                        let mut hit_xs = Vec::new();
-                        while let Some(hit_toi) =
-                            self.mesh.cast_local_ray(&current_ray, max_dist, true)
-                        {
-                            let hit_point = current_ray.point_at(hit_toi);
-                            hit_xs.push(hit_point.x);
-
-                            // Advance ray slightly past the intersection to find the next one
-                            current_ray =
-                                Ray::new(current_ray.point_at(hit_toi + 1e-4), Vector::x());
-
-                            if hit_toi < 1e-5 {
-                                // Break out of an infinite loop if we're not advancing anymore
-                                // Note: The advance is 1e-4, so hit_toi should typically be at least that.
-                                // But if hit_toi evaluates to very near 0 due to precision, this prevents hanging.
-                                // In the original code, the 50-hit cutoff served this purpose.
-                                // Let's use a much larger failsafe instead of 50 to allow complex meshes while still preventing infinite loops.
-                            }
-
-                            // Prevent true infinite loops in degenerate floating-point cases
-                            // without artificially limiting complex geometry.
-                            if hit_xs.len() > 100_000 {
-                                break;
-                            }
-                        }
-
-                        // Sort intersections just in case precision issues caused out-of-order results
-                        hit_xs
-                            .sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-
                         for ix in 0..nx {
-                            let x =
-                                self.bounds_min.x + (ix as f64 * resolution) + (resolution * 0.5);
+                            let x = bounds_min.x + (ix as f64 * resolution) + (resolution * 0.5);
+                            let point_3d = Point::new(x, y, z);
 
                             // A point is inside if it has an odd number of intersections to its right (or left).
-                            // Let's count intersections with X > x.
+                            // hit_xs is sorted, so we can use partition_point for O(log N) lookup.
                             let intersections_to_right =
-                                hit_xs.iter().filter(|&&hx| hx > x).count();
+                                hit_xs.len() - hit_xs.partition_point(|&hx| hx <= x);
 
-                            if intersections_to_right % 2 != 0 {
+                            let is_inside = intersections_to_right % 2 != 0;
+
+                            let distance =
+                                self.mesh.distance_to_local_point(&point_3d, false) as f32;
+                            let sdf = if is_inside { -distance } else { distance };
+
+                            let keep = if let Some(band) = narrow_band {
+                                sdf.abs() <= band as f32
+                            } else {
+                                sdf <= 0.0
+                            };
+
+                            if keep {
                                 let mut phase = 0;
                                 if let Some(sphere) = phase_sphere {
                                     let dx = x - sphere[0];
@@ -378,7 +416,11 @@ impl MeshProcessor {
                                     x: x as f32,
                                     y: y as f32,
                                     z: z as f32,
+                                    sdf,
                                     phase,
+                                    label_id: 0,
+                                    fiber_x: 0.0,
+                                    fiber_y: 0.0,
                                 });
                             }
                         }
@@ -416,10 +458,10 @@ mod tests {
             bounds_max,
         };
 
-        assert!(processor.voxelize(0.0, false, None).is_err());
-        assert!(processor.voxelize(-1.0, false, None).is_err());
-        assert!(processor.voxelize(1e-7, false, None).is_err());
-        assert!(processor.voxelize(0.5, false, None).is_ok());
+        assert!(processor.voxelize(0.0, false, None, None).is_err());
+        assert!(processor.voxelize(-1.0, false, None, None).is_err());
+        assert!(processor.voxelize(1e-7, false, None, None).is_err());
+        assert!(processor.voxelize(0.5, false, None, None).is_ok());
     }
 
     #[test]
@@ -461,7 +503,7 @@ mod tests {
             bounds_max,
         };
 
-        let particles = processor.voxelize(0.5, false, None).unwrap();
+        let particles = processor.voxelize(0.5, false, None, None).unwrap();
         assert_eq!(
             particles.len(),
             8,

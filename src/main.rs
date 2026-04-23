@@ -19,6 +19,9 @@ struct Args {
     #[arg(long)]
     surface_only: bool,
 
+    #[arg(long)]
+    narrow_band: Option<f64>,
+
     #[arg(long, default_value_t = 1.0)]
     scale: f64,
 
@@ -144,7 +147,12 @@ fn main() -> anyhow::Result<()> {
     };
 
     let processor = MeshProcessor::from_file(&args.input, &transform)?;
-    let particles = processor.voxelize(args.resolution, args.surface_only, args.phase_sphere)?;
+    let particles = processor.voxelize(
+        args.resolution,
+        args.surface_only,
+        args.narrow_band,
+        args.phase_sphere,
+    )?;
 
     println!("Generated {} particles.", particles.len());
 
@@ -200,7 +208,7 @@ fn main() -> anyhow::Result<()> {
         _ => {
             // Default to BIN
             let header = ParticleHeader {
-                version: 1,
+                version: 2,
                 particle_count: particles.len() as u64,
                 resolution: args.resolution,
             };
