@@ -28,69 +28,8 @@ struct Args {
     #[arg(long, value_parser = parse_vec3)]
     translate: Option<[f64; 3]>,
 
-    #[arg(long, value_parser = parse_vec3)]
-    rotate: Option<[f64; 3]>,
-
-    #[arg(long, value_parser = parse_vec6)]
-    crop: Option<[f64; 6]>,
-
-    #[arg(long)]
-    vertex_noise: Option<f64>,
-
-    #[arg(long, value_parser = parse_vec4)]
-    phase_sphere: Option<[f64; 4]>,
-
     #[arg(long)]
     threads: Option<usize>,
-}
-
-fn parse_vec4(s: &str) -> Result<[f64; 4], String> {
-    let parts: Vec<&str> = s.split(',').collect();
-    if parts.len() != 4 {
-        return Err(format!("Expected 'x,y,z,radius', got '{}'", s));
-    }
-    let x = parts[0]
-        .parse()
-        .map_err(|_| format!("Invalid x: {}", parts[0]))?;
-    let y = parts[1]
-        .parse()
-        .map_err(|_| format!("Invalid y: {}", parts[1]))?;
-    let z = parts[2]
-        .parse()
-        .map_err(|_| format!("Invalid z: {}", parts[2]))?;
-    let w = parts[3]
-        .parse()
-        .map_err(|_| format!("Invalid radius: {}", parts[3]))?;
-    Ok([x, y, z, w])
-}
-
-fn parse_vec6(s: &str) -> Result<[f64; 6], String> {
-    let parts: Vec<&str> = s.split(',').collect();
-    if parts.len() != 6 {
-        return Err(format!(
-            "Expected 'min_x,min_y,min_z,max_x,max_y,max_z', got '{}'",
-            s
-        ));
-    }
-    let v0 = parts[0]
-        .parse()
-        .map_err(|_| format!("Invalid value: {}", parts[0]))?;
-    let v1 = parts[1]
-        .parse()
-        .map_err(|_| format!("Invalid value: {}", parts[1]))?;
-    let v2 = parts[2]
-        .parse()
-        .map_err(|_| format!("Invalid value: {}", parts[2]))?;
-    let v3 = parts[3]
-        .parse()
-        .map_err(|_| format!("Invalid value: {}", parts[3]))?;
-    let v4 = parts[4]
-        .parse()
-        .map_err(|_| format!("Invalid value: {}", parts[4]))?;
-    let v5 = parts[5]
-        .parse()
-        .map_err(|_| format!("Invalid value: {}", parts[5]))?;
-    Ok([v0, v1, v2, v3, v4, v5])
 }
 
 fn parse_vec3(s: &str) -> Result<[f64; 3], String> {
@@ -138,13 +77,10 @@ fn main() -> anyhow::Result<()> {
         scale: args.scale,
         center: args.center,
         translate: args.translate,
-        rotate: args.rotate,
-        crop: args.crop,
-        vertex_noise: args.vertex_noise,
     };
 
     let processor = MeshProcessor::from_file(&args.input, &transform)?;
-    let particles = processor.voxelize(args.resolution, args.surface_only, args.phase_sphere)?;
+    let particles = processor.voxelize(args.resolution, args.surface_only)?;
 
     println!("Generated {} particles.", particles.len());
 
@@ -174,27 +110,6 @@ fn main() -> anyhow::Result<()> {
             writeln!(writer, "end_header")?;
             for p in &particles {
                 writeln!(writer, "{} {} {}", p.x, p.y, p.z)?;
-            }
-        }
-        Some("vtk") => {
-            writeln!(writer, "# vtk DataFile Version 3.0")?;
-            writeln!(writer, "Voxelizer Output")?;
-            writeln!(writer, "ASCII")?;
-            writeln!(writer, "DATASET POLYDATA")?;
-            writeln!(writer, "POINTS {} float", particles.len())?;
-            for p in &particles {
-                writeln!(writer, "{} {} {}", p.x, p.y, p.z)?;
-            }
-            writeln!(writer, "POINT_DATA {}", particles.len())?;
-            writeln!(writer, "SCALARS phase int 1")?;
-            writeln!(writer, "LOOKUP_TABLE default")?;
-            for p in &particles {
-                writeln!(writer, "{}", p.phase)?;
-            }
-        }
-        Some("obj") => {
-            for p in &particles {
-                writeln!(writer, "v {} {} {}", p.x, p.y, p.z)?;
             }
         }
         _ => {
