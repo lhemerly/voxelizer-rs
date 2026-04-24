@@ -9,7 +9,7 @@ Uses rayon for multi-threaded ray-casting and grid search.
 
 ### Robust: Handles both .stl (binary/ascii) and .obj formats.
 
-### Multi-format Export: Outputs to PLY, CSV, VTK, OBJ, or a compact binary (.bin) format depending on the file extension.
+### Multi-format Export: Outputs to PLY, CSV, VTK, OBJ, MagicaVoxel (.vox), or a compact binary (.bin) format depending on the file extension.
 
 ### Surface and Solid Modes: Generate either a solid voxelized volume, or just a thin surface shell.
 
@@ -29,7 +29,7 @@ Arguments:
 
 ``` -i, --input ```: Path to source mesh. 
 
-``` -o, --output ```: Path to destination file. The format is inferred from the extension (`.csv`, `.ply`, `.vtk`, `.obj`, or `.bin`).
+``` -o, --output ```: Path to destination file. The format is inferred from the extension (`.csv`, `.ply`, `.vtk`, `.obj`, `.vox`, or `.bin`).
 
 ``` -r, --resolution ```: Voxel size in mesh units (default: 0.5).
 
