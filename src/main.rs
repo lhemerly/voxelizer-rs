@@ -115,11 +115,11 @@ fn parse_vec3(s: &str) -> Result<[f64; 3], String> {
 
 fn validate_resolution(s: &str) -> Result<f64, String> {
     let val: f64 = s.parse().map_err(|_| format!("`{s}` isn't a number"))?;
-    if val > 1e-6 {
+    if val.is_finite() && val > 1e-6 {
         Ok(val)
     } else {
         Err(format!(
-            "Resolution must be greater than 1e-6. Provided: {s}"
+            "Resolution must be a finite number greater than 1e-6. Provided: {s}"
         ))
     }
 }
