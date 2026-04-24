@@ -502,7 +502,7 @@ mod tests {
             bounds_max,
         };
 
-        let check_err = |band: f64| {
+        let assert_narrow_band_error = |band: f64| {
             let err = processor
                 .voxelize(0.5, false, Some(band), None)
                 .unwrap_err();
@@ -515,9 +515,10 @@ mod tests {
             );
         };
 
-        check_err(-1.0);
-        check_err(f64::NAN);
-        check_err(f64::INFINITY);
+        assert_narrow_band_error(-1.0);
+        assert_narrow_band_error(f64::NAN);
+        assert_narrow_band_error(f64::INFINITY);
+        assert_narrow_band_error(f64::NEG_INFINITY);
 
         assert!(processor.voxelize(0.5, false, Some(0.0), None).is_ok());
         assert!(processor.voxelize(0.5, false, Some(2.0), None).is_ok());
