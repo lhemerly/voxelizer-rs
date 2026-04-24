@@ -253,10 +253,17 @@ impl MeshProcessor {
         narrow_band: Option<f64>,
         phase_sphere: Option<[f64; 4]>,
     ) -> Result<Vec<ParticleData>> {
-        if resolution <= 1e-6 {
+        if !resolution.is_finite() || resolution <= 1e-6 {
             anyhow::bail!(
-                "Resolution must be greater than 1e-6 to avoid excessive resource usage or division by zero. Provided: {}",
+                "Resolution must be a finite number greater than 1e-6 to avoid excessive resource usage or division by zero. Provided: {}",
                 resolution
+            );
+        }
+
+        if narrow_band.is_some_and(|band| !band.is_finite() || band < 0.0) {
+            anyhow::bail!(
+                "Narrow band must be a finite non-negative number. Provided: {}",
+                narrow_band.unwrap()
             );
         }
 
@@ -458,10 +465,63 @@ mod tests {
             bounds_max,
         };
 
-        assert!(processor.voxelize(0.0, false, None, None).is_err());
-        assert!(processor.voxelize(-1.0, false, None, None).is_err());
-        assert!(processor.voxelize(1e-7, false, None, None).is_err());
+        let check_err = |res: f64| {
+            let err = processor.voxelize(res, false, None, None).unwrap_err();
+            assert_eq!(
+                err.to_string(),
+                format!(
+                    "Resolution must be a finite number greater than 1e-6 to avoid excessive resource usage or division by zero. Provided: {}",
+                    res
+                )
+            );
+        };
+
+        check_err(0.0);
+        check_err(-1.0);
+        check_err(1e-7);
+        check_err(f64::NAN);
+        check_err(f64::INFINITY);
+
         assert!(processor.voxelize(0.5, false, None, None).is_ok());
+    }
+
+    #[test]
+    fn test_voxelize_invalid_narrow_band() {
+        let points = vec![
+            Point::new(0.0, 0.0, 0.0),
+            Point::new(1.0, 0.0, 0.0),
+            Point::new(0.0, 1.0, 0.0),
+        ];
+        let indices = vec![[0, 1, 2]];
+        let mesh = TriMesh::new(points, indices);
+        let bounds_min = Point3::new(0.0, 0.0, 0.0);
+        let bounds_max = Point3::new(1.0, 1.0, 1.0);
+        let processor = MeshProcessor {
+            mesh,
+            bounds_min,
+            bounds_max,
+        };
+
+        let assert_narrow_band_error = |band: f64| {
+            let err = processor
+                .voxelize(0.5, false, Some(band), None)
+                .unwrap_err();
+            assert_eq!(
+                err.to_string(),
+                format!(
+                    "Narrow band must be a finite non-negative number. Provided: {}",
+                    band
+                )
+            );
+        };
+
+        assert_narrow_band_error(-1.0);
+        assert_narrow_band_error(f64::NAN);
+        assert_narrow_band_error(f64::INFINITY);
+        assert_narrow_band_error(f64::NEG_INFINITY);
+
+        assert!(processor.voxelize(0.5, false, Some(0.0), None).is_ok());
+        assert!(processor.voxelize(0.5, false, Some(2.0), None).is_ok());
     }
 
     #[test]
