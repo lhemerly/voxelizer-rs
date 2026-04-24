@@ -35,7 +35,7 @@ Arguments:
 
 ``` --surface-only ```: Optional flag. If provided, the output will only contain surface voxels instead of solid filling.
 
-``` --narrow-band ```: Optional flag. Evaluate and store only the voxels where the absolute distance is within the desired threshold.
+``` --narrow-band ```: Optional value. Evaluate and store only the voxels where the absolute distance is within the desired threshold (e.g., `--narrow-band 1.0`).
 
 ``` --scale ```: Scale multiplier for the mesh dimensions (default: 1.0).
 
