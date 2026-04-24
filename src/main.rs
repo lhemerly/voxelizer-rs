@@ -202,8 +202,8 @@ fn main() -> anyhow::Result<()> {
         }
         Some("vox") => {
             if particles.is_empty() {
-                println!("No particles to export.");
-                return Ok(());
+                println!("No particles to export. Cannot generate empty VOX file.");
+                anyhow::bail!("Cannot generate empty VOX file.");
             }
 
             let mut min_x = f32::MAX;
