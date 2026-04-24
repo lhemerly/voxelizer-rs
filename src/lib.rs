@@ -260,6 +260,15 @@ impl MeshProcessor {
             );
         }
 
+        if let Some(band) = narrow_band {
+            if !band.is_finite() {
+                anyhow::bail!(
+                    "narrow_band must be a finite number. Provided: {}",
+                    band
+                );
+            }
+        }
+
         let start_time = std::time::Instant::now();
 
         let mut bounds_min = self.bounds_min;
@@ -476,6 +485,41 @@ mod tests {
         check_err(f64::INFINITY);
 
         assert!(processor.voxelize(0.5, false, None, None).is_ok());
+    }
+
+    #[test]
+    fn test_voxelize_invalid_narrow_band() {
+        let points = vec![
+            Point::new(0.0, 0.0, 0.0),
+            Point::new(1.0, 0.0, 0.0),
+            Point::new(0.0, 1.0, 0.0),
+        ];
+        let indices = vec![[0, 1, 2]];
+        let mesh = TriMesh::new(points, indices);
+        let bounds_min = Point3::new(0.0, 0.0, 0.0);
+        let bounds_max = Point3::new(1.0, 1.0, 1.0);
+        let processor = MeshProcessor {
+            mesh,
+            bounds_min,
+            bounds_max,
+        };
+
+        let check_band_err = |band: f64| {
+            let err = processor
+                .voxelize(0.5, false, Some(band), None)
+                .unwrap_err();
+            assert_eq!(
+                err.to_string(),
+                format!("narrow_band must be a finite number. Provided: {}", band)
+            );
+        };
+
+        check_band_err(f64::NAN);
+        check_band_err(f64::INFINITY);
+        check_band_err(f64::NEG_INFINITY);
+
+        assert!(processor.voxelize(0.5, false, Some(1.0), None).is_ok());
+        assert!(processor.voxelize(0.5, false, Some(-1.0), None).is_ok());
     }
 
     #[test]

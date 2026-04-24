@@ -19,7 +19,7 @@ struct Args {
     #[arg(long)]
     surface_only: bool,
 
-    #[arg(long)]
+    #[arg(long, value_parser = validate_narrow_band)]
     narrow_band: Option<f64>,
 
     #[arg(long, default_value_t = 1.0)]
@@ -120,6 +120,17 @@ fn validate_resolution(s: &str) -> Result<f64, String> {
     } else {
         Err(format!(
             "Resolution must be a finite number greater than 1e-6. Provided: {s}"
+        ))
+    }
+}
+
+fn validate_narrow_band(s: &str) -> Result<f64, String> {
+    let val: f64 = s.parse().map_err(|_| format!("`{s}` isn't a number"))?;
+    if val.is_finite() {
+        Ok(val)
+    } else {
+        Err(format!(
+            "narrow_band must be a finite number. Provided: {s}"
         ))
     }
 }
