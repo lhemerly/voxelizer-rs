@@ -126,11 +126,11 @@ fn validate_resolution(s: &str) -> Result<f64, String> {
 
 fn validate_narrow_band(s: &str) -> Result<f64, String> {
     let val: f64 = s.parse().map_err(|_| format!("`{s}` isn't a number"))?;
-    if val.is_finite() {
+    if val.is_finite() && val >= 0.0 {
         Ok(val)
     } else {
         Err(format!(
-            "narrow_band must be a finite number. Provided: {s}"
+            "Narrow band must be a finite non-negative number. Provided: {s}"
         ))
     }
 }

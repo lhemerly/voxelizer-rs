@@ -260,13 +260,11 @@ impl MeshProcessor {
             );
         }
 
-        if let Some(band) = narrow_band {
-            if !band.is_finite() {
-                anyhow::bail!(
-                    "narrow_band must be a finite number. Provided: {}",
-                    band
-                );
-            }
+        if narrow_band.is_some_and(|band| !band.is_finite() || band < 0.0) {
+            anyhow::bail!(
+                "Narrow band must be a finite non-negative number. Provided: {}",
+                narrow_band.unwrap()
+            );
         }
 
         let start_time = std::time::Instant::now();
@@ -504,22 +502,25 @@ mod tests {
             bounds_max,
         };
 
-        let check_band_err = |band: f64| {
+        let check_err = |band: f64| {
             let err = processor
                 .voxelize(0.5, false, Some(band), None)
                 .unwrap_err();
             assert_eq!(
                 err.to_string(),
-                format!("narrow_band must be a finite number. Provided: {}", band)
+                format!(
+                    "Narrow band must be a finite non-negative number. Provided: {}",
+                    band
+                )
             );
         };
 
-        check_band_err(f64::NAN);
-        check_band_err(f64::INFINITY);
-        check_band_err(f64::NEG_INFINITY);
+        check_err(-1.0);
+        check_err(f64::NAN);
+        check_err(f64::INFINITY);
 
-        assert!(processor.voxelize(0.5, false, Some(1.0), None).is_ok());
-        assert!(processor.voxelize(0.5, false, Some(-1.0), None).is_ok());
+        assert!(processor.voxelize(0.5, false, Some(0.0), None).is_ok());
+        assert!(processor.voxelize(0.5, false, Some(2.0), None).is_ok());
     }
 
     #[test]
