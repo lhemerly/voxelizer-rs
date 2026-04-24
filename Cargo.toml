@@ -1,6 +1,6 @@
 [package]
 name = "voxelizer-rs"
-version = "0.2.1"
+version = "0.2.0"
 edition = "2024"
 description = "A high-performance, parallel CPU voxelizer that converts STL/OBJ meshes into particle clouds."
 license = "MIT"

@@ -1,5 +1,7 @@
 # Voxelizer-rs
 
+[![Latest Release](https://img.shields.io/badge/release-v0.2.0-blue)](https://github.com/lhemerly/voxelizer-rs/releases/tag/v0.2.0)
+
 A high-performance, parallelized CLI tool written in Rust that converts 3D meshes (STL/OBJ) into particle clouds. 
 
 ## Features
