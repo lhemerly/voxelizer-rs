@@ -200,6 +200,98 @@ fn main() -> anyhow::Result<()> {
                 writeln!(writer, "{}", p.phase)?;
             }
         }
+        Some("vox") => {
+            if particles.is_empty() {
+                println!("No particles to export.");
+                return Ok(());
+            }
+
+            let mut min_x = f32::MAX;
+            let mut min_y = f32::MAX;
+            let mut min_z = f32::MAX;
+            let mut max_x = f32::MIN;
+            let mut max_y = f32::MIN;
+            let mut max_z = f32::MIN;
+
+            for p in &particles {
+                if p.x < min_x {
+                    min_x = p.x;
+                }
+                if p.y < min_y {
+                    min_y = p.y;
+                }
+                if p.z < min_z {
+                    min_z = p.z;
+                }
+                if p.x > max_x {
+                    max_x = p.x;
+                }
+                if p.y > max_y {
+                    max_y = p.y;
+                }
+                if p.z > max_z {
+                    max_z = p.z;
+                }
+            }
+
+            let res = args.resolution as f32;
+            let mut size_x = ((max_x - min_x) / res).round() as u32 + 1;
+            let mut size_y = ((max_y - min_y) / res).round() as u32 + 1;
+            let mut size_z = ((max_z - min_z) / res).round() as u32 + 1;
+
+            if size_x > 256 || size_y > 256 || size_z > 256 {
+                println!(
+                    "Warning: The voxel grid ({size_x}x{size_y}x{size_z}) exceeds MagicaVoxel's 256x256x256 per-model limit. Voxels outside this range will be clamped or wrapped."
+                );
+                size_x = size_x.min(256);
+                size_y = size_y.min(256);
+                size_z = size_z.min(256);
+            }
+
+            // MagicaVoxel format requires a 256-color palette. We'll just use color index 1 for solid and 2 for surface.
+            // Since phase isn't always reliable for surface/solid coloring, we can color by phase or just use 1.
+            let num_voxels = particles.len() as u32;
+
+            // Header
+            writer.write_all(b"VOX ")?;
+            writer.write_all(&150u32.to_le_bytes())?;
+
+            // MAIN chunk
+            writer.write_all(b"MAIN")?;
+            writer.write_all(&0u32.to_le_bytes())?;
+            // Size of children: SIZE chunk (24) + XYZI chunk (16 + 4 * num_voxels)
+            let children_size = 24 + 16 + num_voxels * 4;
+            writer.write_all(&children_size.to_le_bytes())?;
+
+            // SIZE chunk
+            writer.write_all(b"SIZE")?;
+            writer.write_all(&12u32.to_le_bytes())?;
+            writer.write_all(&0u32.to_le_bytes())?;
+            writer.write_all(&size_x.to_le_bytes())?;
+            writer.write_all(&size_y.to_le_bytes())?;
+            writer.write_all(&size_z.to_le_bytes())?;
+
+            // XYZI chunk
+            writer.write_all(b"XYZI")?;
+            let xyzi_content_size = 4 + num_voxels * 4;
+            writer.write_all(&xyzi_content_size.to_le_bytes())?;
+            writer.write_all(&0u32.to_le_bytes())?;
+            writer.write_all(&num_voxels.to_le_bytes())?;
+
+            for p in &particles {
+                let mut vx = ((p.x - min_x) / res).round() as i32;
+                let mut vy = ((p.y - min_y) / res).round() as i32;
+                let mut vz = ((p.z - min_z) / res).round() as i32;
+
+                // Clamp to [0, 255]
+                vx = vx.clamp(0, 255);
+                vy = vy.clamp(0, 255);
+                vz = vz.clamp(0, 255);
+
+                let color_idx = if p.phase > 0 { 2u8 } else { 1u8 };
+                writer.write_all(&[vx as u8, vy as u8, vz as u8, color_idx])?;
+            }
+        }
         Some("obj") => {
             for p in &particles {
                 writeln!(writer, "v {} {} {}", p.x, p.y, p.z)?;
