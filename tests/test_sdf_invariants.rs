@@ -76,9 +76,12 @@ fn test_sdf_invariants() {
     // We must pass narrow_band to ensure exterior voxels are returned!
     // Otherwise it defaults to sdf <= 0.0 for interior voxels only.
     let narrow_band = Some(2.5 * radius);
-    let particles = processor
-        .voxelize(resolution, false, narrow_band, None)
-        .unwrap();
+    let opts = voxelizer_rs::VoxelizeOptions {
+        resolution,
+        narrow_band,
+        ..Default::default()
+    };
+    let particles = processor.voxelize(&opts).unwrap();
 
     let mut center_sdf = f32::MAX;
     let mut boundary_sdf = f32::MAX;
