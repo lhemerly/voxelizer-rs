@@ -333,6 +333,29 @@ impl MeshProcessor {
                     // Because rays are cast along the +X direction, doing X sequentially
                     // keeps the raycast traversals in the same BVH region,
                     // while parallelizing over (Y, Z) ensures finer granularity for Rayon.
+                    let add_particle = |x: f64, y: f64, z: f64, sdf: f32, phase_sphere: Option<[f64; 4]>, local_particles: &mut Vec<ParticleData>| {
+                        let mut phase = 0;
+                        if let Some(sphere) = phase_sphere {
+                            let dx = x - sphere[0];
+                            let dy = y - sphere[1];
+                            let dz = z - sphere[2];
+                            let r2 = sphere[3] * sphere[3];
+                            if dx * dx + dy * dy + dz * dz <= r2 {
+                                phase = 1;
+                            }
+                        }
+                        local_particles.push(ParticleData {
+                            x: x as f32,
+                            y: y as f32,
+                            z: z as f32,
+                            sdf,
+                            phase,
+                            label_id: 0,
+                            fiber_x: 0.0,
+                            fiber_y: 0.0,
+                        });
+                    };
+
                     if surface_only {
                         let half_res = resolution * 0.5;
                         let cuboid = Cuboid::new(Vector::new(half_res, half_res, half_res));
@@ -363,26 +386,7 @@ impl MeshProcessor {
                                 };
 
                                 if keep {
-                                    let mut phase = 0;
-                                    if let Some(sphere) = phase_sphere {
-                                        let dx = x - sphere[0];
-                                        let dy = y - sphere[1];
-                                        let dz = z - sphere[2];
-                                        let r2 = sphere[3] * sphere[3];
-                                        if dx * dx + dy * dy + dz * dz <= r2 {
-                                            phase = 1;
-                                        }
-                                    }
-                                    local_particles.push(ParticleData {
-                                        x: x as f32,
-                                        y: y as f32,
-                                        z: z as f32,
-                                        sdf,
-                                        phase,
-                                        label_id: 0,
-                                        fiber_x: 0.0,
-                                        fiber_y: 0.0,
-                                    });
+                                    add_particle(x, y, z, sdf, phase_sphere, &mut local_particles);
                                 }
                             }
                         }
@@ -398,37 +402,20 @@ impl MeshProcessor {
 
                             let is_inside = intersections_to_right % 2 != 0;
 
-                            let distance =
-                                self.mesh.distance_to_local_point(&point_3d, false) as f32;
-                            let sdf = if is_inside { -distance } else { distance };
-
-                            let keep = if let Some(band) = narrow_band {
-                                sdf.abs() <= band as f32
-                            } else {
-                                sdf <= 0.0
+                            let mut keep = false;
+                            let mut sdf = 0.0;
+                            if let Some(band) = narrow_band {
+                                let distance = self.mesh.distance_to_local_point(&point_3d, false) as f32;
+                                sdf = if is_inside { -distance } else { distance };
+                                keep = sdf.abs() <= band as f32;
+                            } else if is_inside {
+                                let distance = self.mesh.distance_to_local_point(&point_3d, false) as f32;
+                                sdf = -distance;
+                                keep = true;
                             };
 
                             if keep {
-                                let mut phase = 0;
-                                if let Some(sphere) = phase_sphere {
-                                    let dx = x - sphere[0];
-                                    let dy = y - sphere[1];
-                                    let dz = z - sphere[2];
-                                    let r2 = sphere[3] * sphere[3];
-                                    if dx * dx + dy * dy + dz * dz <= r2 {
-                                        phase = 1;
-                                    }
-                                }
-                                local_particles.push(ParticleData {
-                                    x: x as f32,
-                                    y: y as f32,
-                                    z: z as f32,
-                                    sdf,
-                                    phase,
-                                    label_id: 0,
-                                    fiber_x: 0.0,
-                                    fiber_y: 0.0,
-                                });
+                                add_particle(x, y, z, sdf, phase_sphere, &mut local_particles);
                             }
                         }
                     }
