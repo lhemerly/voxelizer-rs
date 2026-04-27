@@ -71,7 +71,7 @@ impl MeshProcessor {
             None => anyhow::bail!("Missing file extension"),
         };
 
-        if let Some(r) = transform.rotate {
+        let rotation = transform.rotate.map(|r| {
             let rx = r[0].to_radians();
             let ry = r[1].to_radians();
             let rz = r[2].to_radians();
@@ -80,17 +80,18 @@ impl MeshProcessor {
             let rot_y = nalgebra::Rotation3::from_axis_angle(&nalgebra::Vector3::y_axis(), ry);
             let rot_z = nalgebra::Rotation3::from_axis_angle(&nalgebra::Vector3::z_axis(), rz);
 
-            let rotation = rot_z * rot_y * rot_x;
+            rot_z * rot_y * rot_x
+        });
 
-            for p in &mut points {
-                *p = rotation * *p;
+        let mut min = Point3::new(f64::MAX, f64::MAX, f64::MAX);
+        let mut max = Point3::new(f64::MIN, f64::MIN, f64::MIN);
+
+        // First pass: apply rotation and compute bounds for centering (if needed)
+        for p in &mut points {
+            if let Some(rot) = rotation {
+                *p = rot * *p;
             }
-        }
-
-        if transform.center {
-            let mut min = Point3::new(f64::MAX, f64::MAX, f64::MAX);
-            let mut max = Point3::new(f64::MIN, f64::MIN, f64::MIN);
-            for p in &points {
+            if transform.center {
                 min.x = min.x.min(p.x);
                 min.y = min.y.min(p.y);
                 min.z = min.z.min(p.z);
@@ -98,59 +99,73 @@ impl MeshProcessor {
                 max.y = max.y.max(p.y);
                 max.z = max.z.max(p.z);
             }
-            let center = Point3::new(
+        }
+
+        let center_offset = if transform.center {
+            Point3::new(
                 (min.x + max.x) * 0.5,
                 (min.y + max.y) * 0.5,
                 (min.z + max.z) * 0.5,
-            );
-            for p in &mut points {
-                p.x -= center.x;
-                p.y -= center.y;
-                p.z -= center.z;
-            }
-        }
+            )
+        } else {
+            Point3::new(0.0, 0.0, 0.0)
+        };
 
-        if (transform.scale - 1.0).abs() > f64::EPSILON {
-            for p in &mut points {
-                p.x *= transform.scale;
-                p.y *= transform.scale;
-                p.z *= transform.scale;
-            }
-        }
+        let scale = if (transform.scale - 1.0).abs() > f64::EPSILON {
+            transform.scale
+        } else {
+            1.0
+        };
 
-        if let Some(t) = transform.translate {
-            for p in &mut points {
-                p.x += t[0];
-                p.y += t[1];
-                p.z += t[2];
-            }
-        }
+        let translate = transform.translate.unwrap_or([0.0, 0.0, 0.0]);
+        let amp = transform.vertex_noise.unwrap_or(0.0);
+        let has_noise = amp > 0.0;
+        let mut seed = 123456789u32;
 
-        #[allow(clippy::collapsible_if)]
-        if let Some(amp) = transform.vertex_noise {
-            if amp > 0.0 {
-                // Simple, fast pseudo-random number generator for noise
-                let mut seed = 123456789u32;
-                for p in &mut points {
-                    seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
-                    let rx = (seed as f64 / u32::MAX as f64) * 2.0 - 1.0;
-                    seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
-                    let ry = (seed as f64 / u32::MAX as f64) * 2.0 - 1.0;
-                    seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
-                    let rz = (seed as f64 / u32::MAX as f64) * 2.0 - 1.0;
+        let mut final_min = Point3::new(f64::MAX, f64::MAX, f64::MAX);
+        let mut final_max = Point3::new(f64::MIN, f64::MIN, f64::MIN);
 
-                    p.x += rx * amp;
-                    p.y += ry * amp;
-                    p.z += rz * amp;
-                }
+        // Second pass: apply center offset, scale, translation, noise, and compute final bounds
+        for p in &mut points {
+            if transform.center {
+                p.x -= center_offset.x;
+                p.y -= center_offset.y;
+                p.z -= center_offset.z;
             }
+
+            p.x *= scale;
+            p.y *= scale;
+            p.z *= scale;
+
+            p.x += translate[0];
+            p.y += translate[1];
+            p.z += translate[2];
+
+            if has_noise {
+                seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+                let rx = (seed as f64 / u32::MAX as f64) * 2.0 - 1.0;
+                seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+                let ry = (seed as f64 / u32::MAX as f64) * 2.0 - 1.0;
+                seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+                let rz = (seed as f64 / u32::MAX as f64) * 2.0 - 1.0;
+
+                p.x += rx * amp;
+                p.y += ry * amp;
+                p.z += rz * amp;
+            }
+
+            final_min.x = final_min.x.min(p.x);
+            final_min.y = final_min.y.min(p.y);
+            final_min.z = final_min.z.min(p.z);
+            final_max.x = final_max.x.max(p.x);
+            final_max.y = final_max.y.max(p.y);
+            final_max.z = final_max.z.max(p.z);
         }
 
         let mesh = TriMesh::new(points, indices);
-        let aabb = mesh.local_aabb();
 
-        let mut bounds_min = aabb.mins;
-        let mut bounds_max = aabb.maxs;
+        let mut bounds_min = final_min;
+        let mut bounds_max = final_max;
 
         if let Some(crop) = transform.crop {
             bounds_min.x = bounds_min.x.max(crop[0]);
@@ -785,6 +800,52 @@ mod tests {
         // The point (1,0,0) rotated 90 degrees around Z should become (0,1,0)
         assert!((processor.bounds_min.x - 0.0).abs() < 1e-5);
         assert!((processor.bounds_max.y - 1.0).abs() < 1e-5);
+
+        std::fs::remove_file(file_path).unwrap();
+    }
+
+    #[test]
+    fn test_transform_combined() {
+        let temp_dir = std::env::temp_dir();
+        let file_path = temp_dir.join(format!(
+            "test_combined_{}.stl",
+            std::time::UNIX_EPOCH.elapsed().unwrap().as_nanos()
+        ));
+
+        // Original points: min is (1.0, 1.0, 1.0), max is (3.0, 3.0, 3.0)
+        let faces = vec![[1.0, 1.0, 1.0], [3.0, 1.0, 1.0], [1.0, 3.0, 3.0]];
+
+        let mut f = std::fs::File::create(&file_path).unwrap();
+        use std::io::Write;
+        f.write_all(&[0; 80]).unwrap();
+        f.write_all(&1u32.to_le_bytes()).unwrap();
+        f.write_all(&[0; 12]).unwrap();
+        for v in &faces {
+            for c in v {
+                f.write_all(&(*c as f32).to_le_bytes()).unwrap();
+            }
+        }
+        f.write_all(&[0; 2]).unwrap();
+
+        let config = TransformConfig {
+            center: true,
+            scale: 2.0,
+            translate: Some([10.0, 10.0, 10.0]),
+            ..Default::default()
+        };
+
+        let processor = MeshProcessor::from_file(file_path.to_str().unwrap(), &config).unwrap();
+
+        // Original bounds: [1, 3] x [1, 3] x [1, 3]
+        // Centered bounds: [-1, 1] x [-1, 1] x [-1, 1]
+        // Scaled bounds (x2): [-2, 2] x [-2, 2] x [-2, 2]
+        // Translated bounds (+10): [8, 12] x [8, 12] x [8, 12]
+        assert_eq!(processor.bounds_min.x, 8.0);
+        assert_eq!(processor.bounds_min.y, 8.0);
+        assert_eq!(processor.bounds_min.z, 8.0);
+        assert_eq!(processor.bounds_max.x, 12.0);
+        assert_eq!(processor.bounds_max.y, 12.0);
+        assert_eq!(processor.bounds_max.z, 12.0);
 
         std::fs::remove_file(file_path).unwrap();
     }
