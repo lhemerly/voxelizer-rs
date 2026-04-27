@@ -398,14 +398,21 @@ impl MeshProcessor {
 
                             let is_inside = intersections_to_right % 2 != 0;
 
-                            let distance =
-                                self.mesh.distance_to_local_point(&point_3d, false) as f32;
-                            let sdf = if is_inside { -distance } else { distance };
-
-                            let keep = if let Some(band) = narrow_band {
-                                sdf.abs() <= band as f32
+                            // OPTIMIZATION: Lazily evaluate the expensive distance_to_local_point query.
+                            // If narrow_band is specified, we must calculate the distance for every voxel to check if it falls within the band.
+                            // Otherwise, for standard solid voxelization, we only care about interior voxels.
+                            // We can completely skip the expensive BVH distance query for exterior voxels, significantly speeding up processing.
+                            let (keep, sdf) = if let Some(band) = narrow_band {
+                                let distance =
+                                    self.mesh.distance_to_local_point(&point_3d, false) as f32;
+                                let sdf = if is_inside { -distance } else { distance };
+                                (sdf.abs() <= band as f32, sdf)
+                            } else if is_inside {
+                                let distance =
+                                    self.mesh.distance_to_local_point(&point_3d, false) as f32;
+                                (true, -distance)
                             } else {
-                                sdf <= 0.0
+                                (false, 0.0)
                             };
 
                             if keep {
