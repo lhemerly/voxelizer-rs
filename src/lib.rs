@@ -1,5 +1,6 @@
 use anyhow::Result;
 use nalgebra::Point3;
+use noise::{NoiseFn, Perlin};
 use parry3d::math::{Isometry, Point, Vector};
 use parry3d::query::{PointQuery, Ray, RayCast, intersection_test};
 use parry3d::shape::{Cuboid, TriMesh};
@@ -252,6 +253,7 @@ impl MeshProcessor {
         surface_only: bool,
         narrow_band: Option<f64>,
         phase_sphere: Option<[f64; 4]>,
+        sdf_noise: Option<f64>,
     ) -> Result<Vec<ParticleData>> {
         if !resolution.is_finite() || resolution <= 1e-6 {
             anyhow::bail!(
@@ -287,6 +289,8 @@ impl MeshProcessor {
         let nx = (size.x / resolution).ceil() as u64;
         let ny = (size.y / resolution).ceil() as u64;
         let nz = (size.z / resolution).ceil() as u64;
+
+        let perlin = Perlin::new(123456);
 
         println!(
             "Grid Dimensions: {} x {} x {} (Potential Voxels: {})",
@@ -333,6 +337,44 @@ impl MeshProcessor {
                     // Because rays are cast along the +X direction, doing X sequentially
                     // keeps the raycast traversals in the same BVH region,
                     // while parallelizing over (Y, Z) ensures finer granularity for Rayon.
+                    let mut add_particle = |x: f64, mut sdf: f32| {
+                        if let Some(amp) = sdf_noise {
+                            let nv = perlin.get([x, y, z]) as f32;
+                            sdf += nv * (amp as f32);
+                        }
+
+                        let keep = if let Some(band) = narrow_band {
+                            sdf.abs() <= band as f32
+                        } else if !surface_only {
+                            sdf <= 0.0
+                        } else {
+                            true
+                        };
+
+                        if keep {
+                            let mut phase = 0;
+                            if let Some(sphere) = phase_sphere {
+                                let dx = x - sphere[0];
+                                let dy = y - sphere[1];
+                                let dz = z - sphere[2];
+                                let r2 = sphere[3] * sphere[3];
+                                if dx * dx + dy * dy + dz * dz <= r2 {
+                                    phase = 1;
+                                }
+                            }
+                            local_particles.push(ParticleData {
+                                x: x as f32,
+                                y: y as f32,
+                                z: z as f32,
+                                sdf,
+                                phase,
+                                label_id: 0,
+                                fiber_x: 0.0,
+                                fiber_y: 0.0,
+                            });
+                        }
+                    };
+
                     if surface_only {
                         let half_res = resolution * 0.5;
                         let cuboid = Cuboid::new(Vector::new(half_res, half_res, half_res));
@@ -354,36 +396,7 @@ impl MeshProcessor {
                                     self.mesh.distance_to_local_point(&point, false) as f32;
                                 let sdf = if is_inside { -distance } else { distance };
 
-                                // Surface voxels inherently intersect the surface, so they should always be kept
-                                // if we're not using narrow_band. If narrow_band is used, we check the distance.
-                                let keep = if let Some(band) = narrow_band {
-                                    sdf.abs() <= band as f32
-                                } else {
-                                    true
-                                };
-
-                                if keep {
-                                    let mut phase = 0;
-                                    if let Some(sphere) = phase_sphere {
-                                        let dx = x - sphere[0];
-                                        let dy = y - sphere[1];
-                                        let dz = z - sphere[2];
-                                        let r2 = sphere[3] * sphere[3];
-                                        if dx * dx + dy * dy + dz * dz <= r2 {
-                                            phase = 1;
-                                        }
-                                    }
-                                    local_particles.push(ParticleData {
-                                        x: x as f32,
-                                        y: y as f32,
-                                        z: z as f32,
-                                        sdf,
-                                        phase,
-                                        label_id: 0,
-                                        fiber_x: 0.0,
-                                        fiber_y: 0.0,
-                                    });
-                                }
+                                add_particle(x, sdf);
                             }
                         }
                     } else {
@@ -402,34 +415,7 @@ impl MeshProcessor {
                                 self.mesh.distance_to_local_point(&point_3d, false) as f32;
                             let sdf = if is_inside { -distance } else { distance };
 
-                            let keep = if let Some(band) = narrow_band {
-                                sdf.abs() <= band as f32
-                            } else {
-                                sdf <= 0.0
-                            };
-
-                            if keep {
-                                let mut phase = 0;
-                                if let Some(sphere) = phase_sphere {
-                                    let dx = x - sphere[0];
-                                    let dy = y - sphere[1];
-                                    let dz = z - sphere[2];
-                                    let r2 = sphere[3] * sphere[3];
-                                    if dx * dx + dy * dy + dz * dz <= r2 {
-                                        phase = 1;
-                                    }
-                                }
-                                local_particles.push(ParticleData {
-                                    x: x as f32,
-                                    y: y as f32,
-                                    z: z as f32,
-                                    sdf,
-                                    phase,
-                                    label_id: 0,
-                                    fiber_x: 0.0,
-                                    fiber_y: 0.0,
-                                });
-                            }
+                            add_particle(x, sdf);
                         }
                     }
                     local_particles
@@ -466,7 +452,9 @@ mod tests {
         };
 
         let check_err = |res: f64| {
-            let err = processor.voxelize(res, false, None, None).unwrap_err();
+            let err = processor
+                .voxelize(res, false, None, None, None)
+                .unwrap_err();
             assert_eq!(
                 err.to_string(),
                 format!(
@@ -482,7 +470,7 @@ mod tests {
         check_err(f64::NAN);
         check_err(f64::INFINITY);
 
-        assert!(processor.voxelize(0.5, false, None, None).is_ok());
+        assert!(processor.voxelize(0.5, false, None, None, None).is_ok());
     }
 
     #[test]
@@ -504,7 +492,7 @@ mod tests {
 
         let assert_narrow_band_error = |band: f64| {
             let err = processor
-                .voxelize(0.5, false, Some(band), None)
+                .voxelize(0.5, false, Some(band), None, None)
                 .unwrap_err();
             assert_eq!(
                 err.to_string(),
@@ -520,8 +508,16 @@ mod tests {
         assert_narrow_band_error(f64::INFINITY);
         assert_narrow_band_error(f64::NEG_INFINITY);
 
-        assert!(processor.voxelize(0.5, false, Some(0.0), None).is_ok());
-        assert!(processor.voxelize(0.5, false, Some(2.0), None).is_ok());
+        assert!(
+            processor
+                .voxelize(0.5, false, Some(0.0), None, None)
+                .is_ok()
+        );
+        assert!(
+            processor
+                .voxelize(0.5, false, Some(2.0), None, None)
+                .is_ok()
+        );
     }
 
     #[test]
@@ -563,7 +559,7 @@ mod tests {
             bounds_max,
         };
 
-        let particles = processor.voxelize(0.5, false, None, None).unwrap();
+        let particles = processor.voxelize(0.5, false, None, None, None).unwrap();
         assert_eq!(
             particles.len(),
             8,

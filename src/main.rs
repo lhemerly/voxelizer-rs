@@ -45,6 +45,12 @@ struct Args {
 
     #[arg(long)]
     threads: Option<usize>,
+
+    #[arg(long)]
+    sdf_noise: Option<f64>,
+
+    #[arg(long)]
+    slices: Option<String>,
 }
 
 fn parse_vec4(s: &str) -> Result<[f64; 4], String> {
@@ -163,9 +169,63 @@ fn main() -> anyhow::Result<()> {
         args.surface_only,
         args.narrow_band,
         args.phase_sphere,
+        args.sdf_noise,
     )?;
 
     println!("Generated {} particles.", particles.len());
+
+    if let Some(slice_dir) = &args.slices {
+        let dir_path = Path::new(slice_dir);
+        if !dir_path.exists() {
+            std::fs::create_dir_all(dir_path)?;
+        }
+
+        let mut min_x = f32::MAX;
+        let mut min_y = f32::MAX;
+        let mut min_z = f32::MAX;
+        let mut max_x = f32::MIN;
+        let mut max_y = f32::MIN;
+        let mut max_z = f32::MIN;
+
+        for p in &particles {
+            min_x = min_x.min(p.x);
+            min_y = min_y.min(p.y);
+            min_z = min_z.min(p.z);
+            max_x = max_x.max(p.x);
+            max_y = max_y.max(p.y);
+            max_z = max_z.max(p.z);
+        }
+
+        let res = args.resolution as f32;
+        let width = ((max_x - min_x) / res).round() as u32 + 1;
+        let height = ((max_y - min_y) / res).round() as u32 + 1;
+        let depth = ((max_z - min_z) / res).round() as u32 + 1;
+
+        println!("Exporting {} slices to {}...", depth, slice_dir);
+
+        let mut slices_data: Vec<image::RgbaImage> =
+            vec![image::RgbaImage::new(width, height); depth as usize];
+
+        for p in &particles {
+            let px = ((p.x - min_x) / res).round() as u32;
+            let py = ((p.y - min_y) / res).round() as u32;
+            let pz = ((p.z - min_z) / res).round() as u32;
+
+            if px < width && py < height && pz < depth {
+                let color = if p.phase > 0 {
+                    image::Rgba([255, 0, 0, 255]) // Red for phase > 0
+                } else {
+                    image::Rgba([255, 255, 255, 255]) // White for standard solid
+                };
+                slices_data[pz as usize].put_pixel(px, py, color);
+            }
+        }
+
+        for (z, img) in slices_data.into_iter().enumerate() {
+            let file_path = dir_path.join(format!("slice_{:04}.png", z));
+            img.save(&file_path)?;
+        }
+    }
 
     let path_out = Path::new(&args.output);
     let extension = path_out
