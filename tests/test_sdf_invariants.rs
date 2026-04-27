@@ -77,7 +77,7 @@ fn test_sdf_invariants() {
     // Otherwise it defaults to sdf <= 0.0 for interior voxels only.
     let narrow_band = Some(2.5 * radius);
     let particles = processor
-        .voxelize(resolution, false, narrow_band, None)
+        .voxelize(resolution, false, narrow_band, None, None)
         .unwrap();
 
     let mut center_sdf = f32::MAX;
