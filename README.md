@@ -4,14 +4,10 @@ A high-performance, parallelized CLI tool written in Rust that converts 3D meshe
 
 ## Features
 
-### Fast: 
-Uses rayon for multi-threaded ray-casting and grid search.
-
-### Robust: Handles both .stl (binary/ascii) and .obj formats.
-
-### Multi-format Export: Outputs to PLY, CSV, VTK, OBJ, MagicaVoxel (.vox), or a compact binary (.bin) format depending on the file extension.
-
-### Surface and Solid Modes: Generate either a solid voxelized volume, or just a thin surface shell.
+* **Fast:** Uses rayon for multi-threaded ray-casting and grid search.
+* **Robust:** Handles both .stl (binary/ascii) and .obj formats.
+* **Multi-format Export:** Outputs to PLY, CSV, VTK, OBJ, MagicaVoxel (.vox), or a compact binary (.bin) format depending on the file extension.
+* **Surface and Solid Modes:** Generate either a solid voxelized volume, or just a thin surface shell.
 
 ## Installation
 
