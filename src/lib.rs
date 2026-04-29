@@ -71,86 +71,77 @@ impl MeshProcessor {
             None => anyhow::bail!("Missing file extension"),
         };
 
-        if let Some(r) = transform.rotate {
+        let rotation_matrix = transform.rotate.map(|r| {
             let rx = r[0].to_radians();
             let ry = r[1].to_radians();
             let rz = r[2].to_radians();
-
             let rot_x = nalgebra::Rotation3::from_axis_angle(&nalgebra::Vector3::x_axis(), rx);
             let rot_y = nalgebra::Rotation3::from_axis_angle(&nalgebra::Vector3::y_axis(), ry);
             let rot_z = nalgebra::Rotation3::from_axis_angle(&nalgebra::Vector3::z_axis(), rz);
+            rot_z * rot_y * rot_x
+        });
 
-            let rotation = rot_z * rot_y * rot_x;
-
-            for p in &mut points {
-                *p = rotation * *p;
-            }
-        }
-
-        if transform.center {
+        let center_offset = if transform.center {
             let mut min = Point3::new(f64::MAX, f64::MAX, f64::MAX);
             let mut max = Point3::new(f64::MIN, f64::MIN, f64::MIN);
             for p in &points {
-                min.x = min.x.min(p.x);
-                min.y = min.y.min(p.y);
-                min.z = min.z.min(p.z);
-                max.x = max.x.max(p.x);
-                max.y = max.y.max(p.y);
-                max.z = max.z.max(p.z);
+                let p_rot = rotation_matrix.map(|rot| rot * *p).unwrap_or(*p);
+                min.x = min.x.min(p_rot.x);
+                min.y = min.y.min(p_rot.y);
+                min.z = min.z.min(p_rot.z);
+                max.x = max.x.max(p_rot.x);
+                max.y = max.y.max(p_rot.y);
+                max.z = max.z.max(p_rot.z);
             }
-            let center = Point3::new(
+            Some(Point3::new(
                 (min.x + max.x) * 0.5,
                 (min.y + max.y) * 0.5,
                 (min.z + max.z) * 0.5,
-            );
-            for p in &mut points {
-                p.x -= center.x;
-                p.y -= center.y;
-                p.z -= center.z;
-            }
-        }
+            ))
+        } else {
+            None
+        };
 
-        if (transform.scale - 1.0).abs() > f64::EPSILON {
-            for p in &mut points {
-                p.x *= transform.scale;
-                p.y *= transform.scale;
-                p.z *= transform.scale;
-            }
-        }
+        let mut bounds_min = Point3::new(f64::MAX, f64::MAX, f64::MAX);
+        let mut bounds_max = Point3::new(f64::MIN, f64::MIN, f64::MIN);
+        let scale = transform.scale;
+        let translate = transform.translate.unwrap_or([0.0, 0.0, 0.0]);
+        let noise_amp = transform.vertex_noise.unwrap_or(0.0);
+        let mut seed = 123456789u32;
 
-        if let Some(t) = transform.translate {
-            for p in &mut points {
-                p.x += t[0];
-                p.y += t[1];
-                p.z += t[2];
+        for p in &mut points {
+            if let Some(rot) = rotation_matrix {
+                *p = rot * *p;
             }
-        }
-
-        #[allow(clippy::collapsible_if)]
-        if let Some(amp) = transform.vertex_noise {
-            if amp > 0.0 {
-                // Simple, fast pseudo-random number generator for noise
-                let mut seed = 123456789u32;
-                for p in &mut points {
-                    seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
-                    let rx = (seed as f64 / u32::MAX as f64) * 2.0 - 1.0;
-                    seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
-                    let ry = (seed as f64 / u32::MAX as f64) * 2.0 - 1.0;
-                    seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
-                    let rz = (seed as f64 / u32::MAX as f64) * 2.0 - 1.0;
-
-                    p.x += rx * amp;
-                    p.y += ry * amp;
-                    p.z += rz * amp;
-                }
+            if let Some(c) = center_offset {
+                p.x -= c.x;
+                p.y -= c.y;
+                p.z -= c.z;
             }
+            p.x = p.x * scale + translate[0];
+            p.y = p.y * scale + translate[1];
+            p.z = p.z * scale + translate[2];
+
+            if noise_amp > 0.0 {
+                seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+                let rx = (seed as f64 / u32::MAX as f64) * 2.0 - 1.0;
+                seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+                let ry = (seed as f64 / u32::MAX as f64) * 2.0 - 1.0;
+                seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+                let rz = (seed as f64 / u32::MAX as f64) * 2.0 - 1.0;
+                p.x += rx * noise_amp;
+                p.y += ry * noise_amp;
+                p.z += rz * noise_amp;
+            }
+            bounds_min.x = bounds_min.x.min(p.x);
+            bounds_min.y = bounds_min.y.min(p.y);
+            bounds_min.z = bounds_min.z.min(p.z);
+            bounds_max.x = bounds_max.x.max(p.x);
+            bounds_max.y = bounds_max.y.max(p.y);
+            bounds_max.z = bounds_max.z.max(p.z);
         }
 
         let mesh = TriMesh::new(points, indices);
-        let aabb = mesh.local_aabb();
-
-        let mut bounds_min = aabb.mins;
-        let mut bounds_max = aabb.maxs;
 
         if let Some(crop) = transform.crop {
             bounds_min.x = bounds_min.x.max(crop[0]);
