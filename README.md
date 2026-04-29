@@ -27,35 +27,35 @@ voxelizer-rs --input heart_model.stl --output heart.bin --resolution 0.5
 
 Arguments:
 
-``` -i, --input ```: Path to source mesh. 
+`-i, --input`: Path to source mesh.
 
-``` -o, --output ```: Path to destination file. The format is inferred from the extension (`.csv`, `.ply`, `.vtk`, `.obj`, `.vox`, or `.bin`).
+`-o, --output`: Path to destination file. The format is inferred from the extension (`.csv`, `.ply`, `.vtk`, `.obj`, `.vox`, or `.bin`).
 
-``` -r, --resolution ```: Voxel size in mesh units (default: 0.5).
+`-r, --resolution`: Voxel size in mesh units (default: 0.5).
 
-``` --surface-only ```: Optional flag. If provided, the output will only contain surface voxels instead of solid filling.
+`--surface-only`: Optional flag. If provided, the output will only contain surface voxels instead of solid filling.
 
-``` --narrow-band ```: Optional value. Evaluate and store only the voxels where the absolute distance is within the desired threshold (e.g., `--narrow-band 1.0`).
+`--narrow-band`: Optional value. Evaluate and store only the voxels where the absolute distance is within the desired threshold (e.g., `--narrow-band 1.0`).
 
-``` --scale ```: Scale multiplier for the mesh dimensions (default: 1.0).
+`--scale`: Scale multiplier for the mesh dimensions (default: 1.0).
 
-``` --center ```: Optional flag. If provided, the mesh will be centered at the origin (0, 0, 0) before processing.
+`--center`: Optional flag. If provided, the mesh will be centered at the origin (0, 0, 0) before processing.
 
-``` --translate ```: Translates the mesh by 'x,y,z' offsets (e.g., `--translate 10,-5,0`).
+`--translate`: Translates the mesh by 'x,y,z' offsets (e.g., `--translate 10,-5,0`).
 
-``` --rotate ```: Rotates the mesh by 'x,y,z' degrees (e.g., `--rotate 90,0,0`).
+`--rotate`: Rotates the mesh by 'x,y,z' degrees (e.g., `--rotate 90,0,0`).
 
-``` --crop ```: Crops the mesh to the given bounding box 'min_x,min_y,min_z,max_x,max_y,max_z' (e.g., `--crop -10,-10,-10,10,10,10`).
+`--crop`: Crops the mesh to the given bounding box 'min_x,min_y,min_z,max_x,max_y,max_z' (e.g., `--crop -10,-10,-10,10,10,10`).
 
-``` --vertex-noise ```: Adds random displacement noise with the specified amplitude.
+`--vertex-noise`: Adds random displacement noise with the specified amplitude.
 
-``` --phase-sphere ```: Specify a sphere for assigning a phase 'x,y,z,radius' (e.g., `--phase-sphere 0,0,0,5`).
+`--phase-sphere`: Specify a sphere for assigning a phase 'x,y,z,radius' (e.g., `--phase-sphere 0,0,0,5`).
 
-``` --threads ```: Number of parallel threads to use. Defaults to the system's logical core count.
+`--threads`: Number of parallel threads to use. Defaults to the system's logical core count.
 
 ## Binary Format Specification
 
-The output file uses a compact custom binary format serialized via ```bincode```.
+The output file uses a compact custom binary format serialized via `bincode`.
 
 ### 1. Header (Little Endian)
 
