@@ -44,6 +44,12 @@ struct Args {
     phase_sphere: Option<[f64; 4]>,
 
     #[arg(long)]
+    sdf_noise: Option<f64>,
+
+    #[arg(long)]
+    slices: Option<String>,
+
+    #[arg(long)]
     threads: Option<usize>,
 }
 
@@ -163,6 +169,7 @@ fn main() -> anyhow::Result<()> {
         args.surface_only,
         args.narrow_band,
         args.phase_sphere,
+        args.sdf_noise,
     )?;
 
     println!("Generated {} particles.", particles.len());
@@ -319,6 +326,75 @@ fn main() -> anyhow::Result<()> {
             bincode::serialize_into(&mut writer, &header)?;
             bincode::serialize_into(&mut writer, &particles)?;
         }
+    }
+
+    if let Some(slices_dir) = args.slices {
+        println!("Exporting Z-slices to {}...", slices_dir);
+        let dir = Path::new(&slices_dir);
+        if !dir.exists() {
+            std::fs::create_dir_all(dir)?;
+        }
+
+        let mut min_x = f32::MAX;
+        let mut min_y = f32::MAX;
+        let mut min_z = f32::MAX;
+        let mut max_x = f32::MIN;
+        let mut max_y = f32::MIN;
+        let mut max_z = f32::MIN;
+
+        for p in &particles {
+            if p.x < min_x {
+                min_x = p.x;
+            }
+            if p.y < min_y {
+                min_y = p.y;
+            }
+            if p.z < min_z {
+                min_z = p.z;
+            }
+            if p.x > max_x {
+                max_x = p.x;
+            }
+            if p.y > max_y {
+                max_y = p.y;
+            }
+            if p.z > max_z {
+                max_z = p.z;
+            }
+        }
+
+        let res = args.resolution as f32;
+        let size_x = ((max_x - min_x) / res).round() as u32 + 1;
+        let size_y = ((max_y - min_y) / res).round() as u32 + 1;
+        let size_z = ((max_z - min_z) / res).round() as u32 + 1;
+
+        let mut grid = vec![vec![vec![0u8; size_x as usize]; size_y as usize]; size_z as usize];
+
+        for p in &particles {
+            let vx = (((p.x - min_x) / res).round() as i32).clamp(0, size_x as i32 - 1) as usize;
+            let vy = (((p.y - min_y) / res).round() as i32).clamp(0, size_y as i32 - 1) as usize;
+            let vz = (((p.z - min_z) / res).round() as i32).clamp(0, size_z as i32 - 1) as usize;
+
+            // Map phase or sdf sign to a grayscale value.
+            // Here, we just mark it white if particle exists.
+            grid[vz][vy][vx] = if p.phase > 0 { 128 } else { 255 };
+        }
+
+        use image::{ImageBuffer, Luma};
+
+        for (z, slice) in grid.iter().enumerate() {
+            let mut img = ImageBuffer::new(size_x, size_y);
+            for y in 0..size_y {
+                for x in 0..size_x {
+                    let val = slice[y as usize][x as usize];
+                    img.put_pixel(x, y, Luma([val]));
+                }
+            }
+            let filename = format!("slice_{:04}.png", z);
+            let path = dir.join(&filename);
+            img.save(&path)?;
+        }
+        println!("Exported {} slices.", size_z);
     }
 
     println!("Saved to {}", args.output);
