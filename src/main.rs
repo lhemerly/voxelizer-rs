@@ -45,6 +45,133 @@ struct Args {
 
     #[arg(long)]
     threads: Option<usize>,
+
+    #[arg(long)]
+    preview: bool,
+
+    #[arg(long)]
+    disintegrate: Option<f64>,
+
+    #[arg(long, value_parser = parse_vec2)]
+    wave: Option<[f64; 2]>,
+}
+
+fn parse_vec2(s: &str) -> Result<[f64; 2], String> {
+    let parts: Vec<&str> = s.split(',').collect();
+    if parts.len() != 2 {
+        return Err(format!("Expected 'x,y', got '{}'", s));
+    }
+    let x = parts[0]
+        .parse()
+        .map_err(|_| format!("Invalid x: {}", parts[0]))?;
+    let y = parts[1]
+        .parse()
+        .map_err(|_| format!("Invalid y: {}", parts[1]))?;
+    Ok([x, y])
+}
+
+fn print_preview(particles: &[voxelizer_rs::ParticleData], _resolution: f64) {
+    if particles.is_empty() {
+        return;
+    }
+
+    let mut min_x = f32::MAX;
+    let mut min_y = f32::MAX;
+    let mut min_z = f32::MAX;
+    let mut max_x = f32::MIN;
+    let mut max_y = f32::MIN;
+    let mut max_z = f32::MIN;
+
+    for p in particles {
+        min_x = min_x.min(p.x);
+        min_y = min_y.min(p.y);
+        min_z = min_z.min(p.z);
+        max_x = max_x.max(p.x);
+        max_y = max_y.max(p.y);
+        max_z = max_z.max(p.z);
+    }
+
+    let width = 60;
+    let height = 30;
+
+    // We'll generate two views: Top (X-Z) and Front (X-Y)
+
+    let draw_view = |get_x: &dyn Fn(&voxelizer_rs::ParticleData) -> f32,
+                     get_y: &dyn Fn(&voxelizer_rs::ParticleData) -> f32,
+                     view_min_x: f32,
+                     view_max_x: f32,
+                     view_min_y: f32,
+                     view_max_y: f32|
+     -> Vec<String> {
+        let span_x = (view_max_x - view_min_x).max(1e-5);
+        let span_y = (view_max_y - view_min_y).max(1e-5);
+
+        // Braille characters represent a 2x4 pixel grid.
+        let pixel_width = width * 2;
+        let pixel_height = height * 4;
+
+        let mut grid = vec![false; pixel_width * pixel_height];
+
+        for p in particles {
+            let px = get_x(p);
+            let py = get_y(p);
+
+            let x = (((px - view_min_x) / span_x) * (pixel_width as f32 - 1.0)).round() as usize;
+            // Invert Y so up is up in the terminal
+            let y = (((view_max_y - py) / span_y) * (pixel_height as f32 - 1.0)).round() as usize;
+
+            if x < pixel_width && y < pixel_height {
+                grid[y * pixel_width + x] = true;
+            }
+        }
+
+        let mut lines = Vec::new();
+        for by in 0..height {
+            let mut line = String::new();
+            for bx in 0..width {
+                let mut v = 0;
+                for dy in 0..4 {
+                    for dx in 0..2 {
+                        let px = bx * 2 + dx;
+                        let py = by * 4 + dy;
+                        if grid[py * pixel_width + px] {
+                            // Braille dot mapping
+                            let dot_idx = match (dx, dy) {
+                                (0, 0) => 0,
+                                (0, 1) => 1,
+                                (0, 2) => 2,
+                                (1, 0) => 3,
+                                (1, 1) => 4,
+                                (1, 2) => 5,
+                                (0, 3) => 6,
+                                (1, 3) => 7,
+                                _ => unreachable!(),
+                            };
+                            v |= 1 << dot_idx;
+                        }
+                    }
+                }
+                if v == 0 {
+                    line.push(' ');
+                } else {
+                    line.push(std::char::from_u32(0x2800 + v).unwrap_or(' '));
+                }
+            }
+            lines.push(line);
+        }
+        lines
+    };
+
+    let top_lines = draw_view(&|p| p.x, &|p| p.z, min_x, max_x, min_z, max_z);
+    let front_lines = draw_view(&|p| p.x, &|p| p.y, min_x, max_x, min_y, max_y);
+
+    println!("\nPreview:");
+    println!("{:<60} | Front View (X-Y)", "Top View (X-Z)");
+    println!("{:-<60}-+-{:-<60}", "", "");
+    for i in 0..height {
+        println!("{} | {}", top_lines[i], front_lines[i]);
+    }
+    println!();
 }
 
 fn parse_vec4(s: &str) -> Result<[f64; 4], String> {
@@ -158,14 +285,49 @@ fn main() -> anyhow::Result<()> {
     };
 
     let processor = MeshProcessor::from_file(&args.input, &transform)?;
-    let particles = processor.voxelize(
+    let mut particles = processor.voxelize(
         args.resolution,
         args.surface_only,
         args.narrow_band,
         args.phase_sphere,
     )?;
 
+    if args.disintegrate.is_some() || args.wave.is_some() {
+        println!("Applying procedural modifiers...");
+
+        let mut seed = 123456789u32;
+        let mut rng = || -> f64 {
+            seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+            (seed as f64) / (u32::MAX as f64)
+        };
+
+        #[allow(clippy::collapsible_if)]
+        particles.retain_mut(|p| {
+            let mut keep = true;
+
+            if let Some(prob) = args.disintegrate {
+                if rng() < prob {
+                    keep = false;
+                }
+            }
+
+            if keep {
+                if let Some(wave) = args.wave {
+                    let amplitude = wave[0] as f32;
+                    let frequency = wave[1] as f32;
+                    p.y += (p.x * frequency).sin() * amplitude;
+                }
+            }
+
+            keep
+        });
+    }
+
     println!("Generated {} particles.", particles.len());
+
+    if args.preview {
+        print_preview(&particles, args.resolution);
+    }
 
     let path_out = Path::new(&args.output);
     let extension = path_out

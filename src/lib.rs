@@ -1,4 +1,5 @@
 use anyhow::Result;
+use indicatif::{ProgressBar, ProgressStyle};
 use nalgebra::Point3;
 use parry3d::math::{Isometry, Point, Vector};
 use parry3d::query::{PointQuery, Ray, RayCast, intersection_test};
@@ -296,11 +297,20 @@ impl MeshProcessor {
             nx * ny * nz
         );
 
+        let pb = ProgressBar::new(ny);
+        pb.set_style(
+            ProgressStyle::default_bar()
+                .template("[{elapsed_precise}] {bar:40.cyan/blue} {pos:>7}/{len:7} {msg}")
+                .unwrap()
+                .progress_chars("##-"),
+        );
+
         // We avoid collecting the entire yz cartesian product to save memory.
         // Instead we can use rayon's `into_par_iter` on a range or use flat_map across the ranges.
         let particles: Vec<ParticleData> = (0..ny)
             .into_par_iter()
             .flat_map(|iy| {
+                pb.inc(1);
                 (0..nz).into_par_iter().flat_map(move |iz| {
                     let mut local_particles = Vec::with_capacity(nx as usize);
                     let y = bounds_min.y + (iy as f64 * resolution) + (resolution * 0.5);
@@ -436,6 +446,8 @@ impl MeshProcessor {
                 })
             })
             .collect();
+
+        pb.finish_with_message("Done");
 
         let duration = start_time.elapsed();
         println!("Voxelization complete in {:.2?}s", duration);
