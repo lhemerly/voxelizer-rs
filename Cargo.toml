@@ -25,6 +25,7 @@ inherits = "release"
 lto = "thin"
 
 [dev-dependencies]
+assert_cmd = "2.2.1"
 criterion = "0.8.2"
 
 [[bench]]
