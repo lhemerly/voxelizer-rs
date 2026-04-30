@@ -2,7 +2,7 @@ use clap::Parser;
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::Path;
-use voxelizer_rs::{MeshProcessor, ParticleHeader, TransformConfig};
+use voxelizer_rs::{MeshProcessor, ParticleHeader, TransformConfig, VoxelizeOptions};
 
 #[derive(Parser, Debug)]
 #[command(author, version, about = "Voxelizer")]
@@ -158,12 +158,13 @@ fn main() -> anyhow::Result<()> {
     };
 
     let processor = MeshProcessor::from_file(&args.input, &transform)?;
-    let particles = processor.voxelize(
-        args.resolution,
-        args.surface_only,
-        args.narrow_band,
-        args.phase_sphere,
-    )?;
+    let options = VoxelizeOptions {
+        resolution: args.resolution,
+        surface_only: args.surface_only,
+        narrow_band: args.narrow_band,
+        phase_sphere: args.phase_sphere,
+    };
+    let particles = processor.voxelize(&options)?;
 
     println!("Generated {} particles.", particles.len());
 
@@ -178,9 +179,9 @@ fn main() -> anyhow::Result<()> {
 
     match extension.as_deref() {
         Some("csv") => {
-            writeln!(writer, "x,y,z,phase")?;
+            writeln!(writer, "x,y,z,sdf,phase")?;
             for p in &particles {
-                writeln!(writer, "{},{},{},{}", p.x, p.y, p.z, p.phase)?;
+                writeln!(writer, "{},{},{},{},{}", p.x, p.y, p.z, p.sdf, p.phase)?;
             }
         }
         Some("ply") => {
@@ -190,9 +191,10 @@ fn main() -> anyhow::Result<()> {
             writeln!(writer, "property float x")?;
             writeln!(writer, "property float y")?;
             writeln!(writer, "property float z")?;
+            writeln!(writer, "property float sdf")?;
             writeln!(writer, "end_header")?;
             for p in &particles {
-                writeln!(writer, "{} {} {}", p.x, p.y, p.z)?;
+                writeln!(writer, "{} {} {} {}", p.x, p.y, p.z, p.sdf)?;
             }
         }
         Some("vtk") => {
