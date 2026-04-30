@@ -43,8 +43,28 @@ struct Args {
     #[arg(long, value_parser = parse_vec4)]
     phase_sphere: Option<[f64; 4]>,
 
+    #[arg(long, value_parser = parse_vec2)]
+    sdf_noise: Option<[f64; 2]>,
+
+    #[arg(long)]
+    slices: Option<String>,
+
     #[arg(long)]
     threads: Option<usize>,
+}
+
+fn parse_vec2(s: &str) -> Result<[f64; 2], String> {
+    let parts: Vec<&str> = s.split(',').collect();
+    if parts.len() != 2 {
+        return Err(format!("Expected 'frequency,amplitude', got '{}'", s));
+    }
+    let x = parts[0]
+        .parse()
+        .map_err(|_| format!("Invalid frequency: {}", parts[0]))?;
+    let y = parts[1]
+        .parse()
+        .map_err(|_| format!("Invalid amplitude: {}", parts[1]))?;
+    Ok([x, y])
 }
 
 fn parse_vec4(s: &str) -> Result<[f64; 4], String> {
@@ -163,9 +183,75 @@ fn main() -> anyhow::Result<()> {
         args.surface_only,
         args.narrow_band,
         args.phase_sphere,
+        args.sdf_noise,
     )?;
 
     println!("Generated {} particles.", particles.len());
+
+    if let Some(slices_dir) = args.slices {
+        let dir_path = Path::new(&slices_dir);
+        std::fs::create_dir_all(dir_path)?;
+
+        if particles.is_empty() {
+            println!("No particles generated, skipping slicing.");
+        } else {
+            let mut min_x = f32::MAX;
+            let mut min_y = f32::MAX;
+            let mut max_x = f32::MIN;
+            let mut max_y = f32::MIN;
+
+            for p in &particles {
+                if p.x < min_x {
+                    min_x = p.x;
+                }
+                if p.y < min_y {
+                    min_y = p.y;
+                }
+                if p.x > max_x {
+                    max_x = p.x;
+                }
+                if p.y > max_y {
+                    max_y = p.y;
+                }
+            }
+
+            let res = args.resolution as f32;
+            let size_x = ((max_x - min_x) / res).round() as u32 + 1;
+            let size_y = ((max_y - min_y) / res).round() as u32 + 1;
+
+            let mut z_groups: std::collections::BTreeMap<i32, Vec<&voxelizer_rs::ParticleData>> =
+                std::collections::BTreeMap::new();
+            for p in &particles {
+                let z_idx = (p.z / res).round() as i32;
+                z_groups.entry(z_idx).or_default().push(p);
+            }
+
+            println!(
+                "Exporting {} Z-slices to directory: {}",
+                z_groups.len(),
+                slices_dir
+            );
+
+            for (idx, (_z_idx, layer_particles)) in z_groups.iter().enumerate() {
+                let mut img = image::ImageBuffer::new(size_x, size_y);
+                for p in layer_particles {
+                    let px = ((p.x - min_x) / res).round() as u32;
+                    let py = ((p.y - min_y) / res).round() as u32;
+                    if px < size_x && py < size_y {
+                        let color = if p.phase > 0 {
+                            image::Rgb([255u8, 0, 0]) // Red for phase > 0
+                        } else {
+                            image::Rgb([255u8, 255, 255]) // White for default
+                        };
+                        img.put_pixel(px, py, color);
+                    }
+                }
+                let slice_path = dir_path.join(format!("slice_{:04}.png", idx));
+                img.save(slice_path)?;
+            }
+            println!("Finished exporting slices.");
+        }
+    }
 
     let path_out = Path::new(&args.output);
     let extension = path_out
@@ -178,9 +264,9 @@ fn main() -> anyhow::Result<()> {
 
     match extension.as_deref() {
         Some("csv") => {
-            writeln!(writer, "x,y,z,phase")?;
+            writeln!(writer, "x,y,z,sdf,phase")?;
             for p in &particles {
-                writeln!(writer, "{},{},{},{}", p.x, p.y, p.z, p.phase)?;
+                writeln!(writer, "{},{},{},{},{}", p.x, p.y, p.z, p.sdf, p.phase)?;
             }
         }
         Some("ply") => {
@@ -190,9 +276,10 @@ fn main() -> anyhow::Result<()> {
             writeln!(writer, "property float x")?;
             writeln!(writer, "property float y")?;
             writeln!(writer, "property float z")?;
+            writeln!(writer, "property float sdf")?;
             writeln!(writer, "end_header")?;
             for p in &particles {
-                writeln!(writer, "{} {} {}", p.x, p.y, p.z)?;
+                writeln!(writer, "{} {} {} {}", p.x, p.y, p.z, p.sdf)?;
             }
         }
         Some("vtk") => {

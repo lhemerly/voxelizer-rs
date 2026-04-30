@@ -1,5 +1,6 @@
 use anyhow::Result;
 use nalgebra::Point3;
+use noise::{NoiseFn, Perlin};
 use parry3d::math::{Isometry, Point, Vector};
 use parry3d::query::{PointQuery, Ray, RayCast, intersection_test};
 use parry3d::shape::{Cuboid, TriMesh};
@@ -252,6 +253,7 @@ impl MeshProcessor {
         surface_only: bool,
         narrow_band: Option<f64>,
         phase_sphere: Option<[f64; 4]>,
+        sdf_noise: Option<[f64; 2]>,
     ) -> Result<Vec<ParticleData>> {
         if !resolution.is_finite() || resolution <= 1e-6 {
             anyhow::bail!(
@@ -295,6 +297,8 @@ impl MeshProcessor {
             nz,
             nx * ny * nz
         );
+
+        let perlin = Perlin::new(1);
 
         // We avoid collecting the entire yz cartesian product to save memory.
         // Instead we can use rayon's `into_par_iter` on a range or use flat_map across the ranges.
@@ -352,7 +356,12 @@ impl MeshProcessor {
 
                                 let distance =
                                     self.mesh.distance_to_local_point(&point, false) as f32;
-                                let sdf = if is_inside { -distance } else { distance };
+                                let mut sdf = if is_inside { -distance } else { distance };
+
+                                if let Some([freq, amp]) = sdf_noise {
+                                    let nv = perlin.get([x * freq, y * freq, z * freq]);
+                                    sdf += (nv * amp) as f32;
+                                }
 
                                 // Surface voxels inherently intersect the surface, so they should always be kept
                                 // if we're not using narrow_band. If narrow_band is used, we check the distance.
@@ -396,16 +405,22 @@ impl MeshProcessor {
                             let intersections_to_right =
                                 hit_xs.len() - hit_xs.partition_point(|&hx| hx <= x);
 
-                            let is_inside = intersections_to_right % 2 != 0;
+                            let mut is_inside = intersections_to_right % 2 != 0;
 
                             let distance =
                                 self.mesh.distance_to_local_point(&point_3d, false) as f32;
-                            let sdf = if is_inside { -distance } else { distance };
+                            let mut sdf = if is_inside { -distance } else { distance };
+
+                            if let Some([freq, amp]) = sdf_noise {
+                                let nv = perlin.get([x * freq, y * freq, z * freq]);
+                                sdf += (nv * amp) as f32;
+                                is_inside = sdf <= 0.0;
+                            }
 
                             let keep = if let Some(band) = narrow_band {
                                 sdf.abs() <= band as f32
                             } else {
-                                sdf <= 0.0
+                                is_inside
                             };
 
                             if keep {
@@ -466,7 +481,9 @@ mod tests {
         };
 
         let check_err = |res: f64| {
-            let err = processor.voxelize(res, false, None, None).unwrap_err();
+            let err = processor
+                .voxelize(res, false, None, None, None)
+                .unwrap_err();
             assert_eq!(
                 err.to_string(),
                 format!(
@@ -482,7 +499,7 @@ mod tests {
         check_err(f64::NAN);
         check_err(f64::INFINITY);
 
-        assert!(processor.voxelize(0.5, false, None, None).is_ok());
+        assert!(processor.voxelize(0.5, false, None, None, None).is_ok());
     }
 
     #[test]
@@ -504,7 +521,7 @@ mod tests {
 
         let assert_narrow_band_error = |band: f64| {
             let err = processor
-                .voxelize(0.5, false, Some(band), None)
+                .voxelize(0.5, false, Some(band), None, None)
                 .unwrap_err();
             assert_eq!(
                 err.to_string(),
@@ -520,8 +537,16 @@ mod tests {
         assert_narrow_band_error(f64::INFINITY);
         assert_narrow_band_error(f64::NEG_INFINITY);
 
-        assert!(processor.voxelize(0.5, false, Some(0.0), None).is_ok());
-        assert!(processor.voxelize(0.5, false, Some(2.0), None).is_ok());
+        assert!(
+            processor
+                .voxelize(0.5, false, Some(0.0), None, None)
+                .is_ok()
+        );
+        assert!(
+            processor
+                .voxelize(0.5, false, Some(2.0), None, None)
+                .is_ok()
+        );
     }
 
     #[test]
@@ -563,7 +588,7 @@ mod tests {
             bounds_max,
         };
 
-        let particles = processor.voxelize(0.5, false, None, None).unwrap();
+        let particles = processor.voxelize(0.5, false, None, None, None).unwrap();
         assert_eq!(
             particles.len(),
             8,
