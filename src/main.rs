@@ -45,6 +45,15 @@ struct Args {
 
     #[arg(long)]
     threads: Option<usize>,
+
+    #[arg(long)]
+    disintegrate: Option<f64>,
+
+    #[arg(long, value_parser = parse_vec3)]
+    wave: Option<[f64; 3]>,
+
+    #[arg(long, value_parser = parse_vec2)]
+    twist: Option<[f64; 2]>,
 }
 
 fn parse_vec4(s: &str) -> Result<[f64; 4], String> {
@@ -94,6 +103,20 @@ fn parse_vec6(s: &str) -> Result<[f64; 6], String> {
         .parse()
         .map_err(|_| format!("Invalid value: {}", parts[5]))?;
     Ok([v0, v1, v2, v3, v4, v5])
+}
+
+fn parse_vec2(s: &str) -> Result<[f64; 2], String> {
+    let parts: Vec<&str> = s.split(',').collect();
+    if parts.len() != 2 {
+        return Err(format!("Expected 'x,y', got '{}'", s));
+    }
+    let x = parts[0]
+        .parse()
+        .map_err(|_| format!("Invalid x: {}", parts[0]))?;
+    let y = parts[1]
+        .parse()
+        .map_err(|_| format!("Invalid y: {}", parts[1]))?;
+    Ok([x, y])
 }
 
 fn parse_vec3(s: &str) -> Result<[f64; 3], String> {
@@ -158,12 +181,68 @@ fn main() -> anyhow::Result<()> {
     };
 
     let processor = MeshProcessor::from_file(&args.input, &transform)?;
-    let particles = processor.voxelize(
+    let mut particles = processor.voxelize(
         args.resolution,
         args.surface_only,
         args.narrow_band,
         args.phase_sphere,
     )?;
+
+    if let Some(wave) = args.wave {
+        let amp = wave[0] as f32;
+        let freq = wave[1] as f32;
+        let axis = wave[2] as i32;
+        for p in &mut particles {
+            match axis {
+                0 => p.x += amp * (freq * p.y).sin(),
+                1 => p.y += amp * (freq * p.z).sin(),
+                2 => p.z += amp * (freq * p.x).sin(),
+                _ => {}
+            }
+        }
+    }
+
+    if let Some(twist) = args.twist {
+        let angle_per_unit = twist[0] as f32;
+        let axis = twist[1] as i32;
+        for p in &mut particles {
+            match axis {
+                0 => {
+                    let theta = p.x * angle_per_unit;
+                    let y = p.y * theta.cos() - p.z * theta.sin();
+                    let z = p.y * theta.sin() + p.z * theta.cos();
+                    p.y = y;
+                    p.z = z;
+                }
+                1 => {
+                    let theta = p.y * angle_per_unit;
+                    let x = p.x * theta.cos() - p.z * theta.sin();
+                    let z = p.x * theta.sin() + p.z * theta.cos();
+                    p.x = x;
+                    p.z = z;
+                }
+                2 => {
+                    let theta = p.z * angle_per_unit;
+                    let x = p.x * theta.cos() - p.y * theta.sin();
+                    let y = p.x * theta.sin() + p.y * theta.cos();
+                    p.x = x;
+                    p.y = y;
+                }
+                _ => {}
+            }
+        }
+    }
+
+    if let Some(disintegrate) = args.disintegrate {
+        particles.retain(|p| {
+            let hash =
+                p.x.to_bits()
+                    .wrapping_add(p.y.to_bits())
+                    .wrapping_add(p.z.to_bits());
+            let rand_val = (hash as f64 / u32::MAX as f64).fract();
+            rand_val >= disintegrate
+        });
+    }
 
     println!("Generated {} particles.", particles.len());
 
@@ -323,4 +402,35 @@ fn main() -> anyhow::Result<()> {
 
     println!("Saved to {}", args.output);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_vec2() {
+        assert_eq!(parse_vec2("1.0,2.5").unwrap(), [1.0, 2.5]);
+        assert!(parse_vec2("1.0").is_err());
+        assert!(parse_vec2("a,b").is_err());
+    }
+
+    #[test]
+    fn test_parse_vec3() {
+        assert_eq!(parse_vec3("1.0,2.5,3.0").unwrap(), [1.0, 2.5, 3.0]);
+        assert!(parse_vec3("1.0,2.0").is_err());
+    }
+
+    #[test]
+    fn test_parse_vec4() {
+        assert_eq!(parse_vec4("1.0,2.0,3.0,4.0").unwrap(), [1.0, 2.0, 3.0, 4.0]);
+    }
+
+    #[test]
+    fn test_parse_vec6() {
+        assert_eq!(
+            parse_vec6("1.0,2.0,3.0,4.0,5.0,6.0").unwrap(),
+            [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
+        );
+    }
 }
