@@ -178,9 +178,9 @@ fn main() -> anyhow::Result<()> {
 
     match extension.as_deref() {
         Some("csv") => {
-            writeln!(writer, "x,y,z,phase")?;
+            writeln!(writer, "x,y,z,sdf,phase")?;
             for p in &particles {
-                writeln!(writer, "{},{},{},{}", p.x, p.y, p.z, p.phase)?;
+                writeln!(writer, "{},{},{},{},{}", p.x, p.y, p.z, p.sdf, p.phase)?;
             }
         }
         Some("ply") => {
@@ -190,9 +190,10 @@ fn main() -> anyhow::Result<()> {
             writeln!(writer, "property float x")?;
             writeln!(writer, "property float y")?;
             writeln!(writer, "property float z")?;
+            writeln!(writer, "property float sdf")?;
             writeln!(writer, "end_header")?;
             for p in &particles {
-                writeln!(writer, "{} {} {}", p.x, p.y, p.z)?;
+                writeln!(writer, "{} {} {} {}", p.x, p.y, p.z, p.sdf)?;
             }
         }
         Some("vtk") => {
@@ -209,6 +210,11 @@ fn main() -> anyhow::Result<()> {
             writeln!(writer, "LOOKUP_TABLE default")?;
             for p in &particles {
                 writeln!(writer, "{}", p.phase)?;
+            }
+            writeln!(writer, "SCALARS sdf float 1")?;
+            writeln!(writer, "LOOKUP_TABLE default")?;
+            for p in &particles {
+                writeln!(writer, "{}", p.sdf)?;
             }
         }
         Some("vox") => {
