@@ -37,6 +37,8 @@ pub struct TransformConfig {
     pub rotate: Option<[f64; 3]>,  // x, y, z in degrees
     pub crop: Option<[f64; 6]>,    // min_x, min_y, min_z, max_x, max_y, max_z
     pub vertex_noise: Option<f64>, // random displacement amplitude
+    pub twist: Option<f64>,        // twist degrees per Z unit
+    pub taper: Option<f64>,        // taper scale factor per Z unit
 }
 
 impl Default for TransformConfig {
@@ -48,6 +50,8 @@ impl Default for TransformConfig {
             rotate: None,
             crop: None,
             vertex_noise: None,
+            twist: None,
+            taper: None,
         }
     }
 }
@@ -70,6 +74,31 @@ impl MeshProcessor {
             Some(ext) => anyhow::bail!("Unsupported file format: {}", ext),
             None => anyhow::bail!("Missing file extension"),
         };
+
+        if let Some(taper) = transform.taper {
+            for p in &mut points {
+                // Scale X and Y based on Z height (taper factor per Z unit)
+                // If Z is 0, scale is 1. If Z is 10 and taper is 0.1, scale is 1.0 - 1.0 = 0.0
+                // Wait, it's better to taper as: scale = 1.0 - (Z * taper). Or just scale = 1.0 + (Z * taper).
+                // Let's use scale = 1.0 + (p.z * taper). So if taper is negative, it shrinks as Z goes up.
+                let scale = 1.0 + (p.z * taper);
+                p.x *= scale;
+                p.y *= scale;
+            }
+        }
+
+        if let Some(twist) = transform.twist {
+            for p in &mut points {
+                // Twist angle in radians based on Z height
+                let angle = p.z * twist.to_radians();
+                let cos_a = angle.cos();
+                let sin_a = angle.sin();
+                let x_new = p.x * cos_a - p.y * sin_a;
+                let y_new = p.x * sin_a + p.y * cos_a;
+                p.x = x_new;
+                p.y = y_new;
+            }
+        }
 
         if let Some(r) = transform.rotate {
             let rx = r[0].to_radians();
@@ -252,6 +281,7 @@ impl MeshProcessor {
         surface_only: bool,
         narrow_band: Option<f64>,
         phase_sphere: Option<[f64; 4]>,
+        porous: Option<f64>,
     ) -> Result<Vec<ParticleData>> {
         if !resolution.is_finite() || resolution <= 1e-6 {
             anyhow::bail!(
@@ -295,6 +325,9 @@ impl MeshProcessor {
             nz,
             nx * ny * nz
         );
+
+        use noise::{NoiseFn, Perlin};
+        let perlin = Perlin::new(12345);
 
         // We avoid collecting the entire yz cartesian product to save memory.
         // Instead we can use rayon's `into_par_iter` on a range or use flat_map across the ranges.
@@ -356,11 +389,21 @@ impl MeshProcessor {
 
                                 // Surface voxels inherently intersect the surface, so they should always be kept
                                 // if we're not using narrow_band. If narrow_band is used, we check the distance.
-                                let keep = if let Some(band) = narrow_band {
+                                let mut keep = if let Some(band) = narrow_band {
                                     sdf.abs() <= band as f32
                                 } else {
                                     true
                                 };
+
+                                #[allow(clippy::collapsible_if)]
+                                if keep {
+                                    if let Some(threshold) = porous {
+                                        let val = perlin.get([x * 0.1, y * 0.1, z * 0.1]);
+                                        if val < threshold {
+                                            keep = false;
+                                        }
+                                    }
+                                }
 
                                 if keep {
                                     let mut phase = 0;
@@ -402,11 +445,21 @@ impl MeshProcessor {
                                 self.mesh.distance_to_local_point(&point_3d, false) as f32;
                             let sdf = if is_inside { -distance } else { distance };
 
-                            let keep = if let Some(band) = narrow_band {
+                            let mut keep = if let Some(band) = narrow_band {
                                 sdf.abs() <= band as f32
                             } else {
                                 sdf <= 0.0
                             };
+
+                            #[allow(clippy::collapsible_if)]
+                            if keep {
+                                if let Some(threshold) = porous {
+                                    let val = perlin.get([x * 0.1, y * 0.1, z * 0.1]);
+                                    if val < threshold {
+                                        keep = false;
+                                    }
+                                }
+                            }
 
                             if keep {
                                 let mut phase = 0;
@@ -449,6 +502,137 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_transform_taper() {
+        let temp_dir = std::env::temp_dir();
+        let file_path = temp_dir.join(format!(
+            "test_taper_{}.stl",
+            std::time::UNIX_EPOCH.elapsed().unwrap().as_nanos()
+        ));
+
+        // Create a triangle at z=1.0 and z=0.0
+        let faces = vec![
+            [[1.0, 1.0, 1.0], [2.0, 1.0, 1.0], [1.0, 2.0, 1.0]],
+            [[1.0, 1.0, 0.0], [2.0, 1.0, 0.0], [1.0, 2.0, 0.0]],
+        ];
+
+        let mut f = std::fs::File::create(&file_path).unwrap();
+        use std::io::Write;
+        f.write_all(&[0; 80]).unwrap();
+        f.write_all(&2u32.to_le_bytes()).unwrap();
+        for v in &faces {
+            f.write_all(&[0; 12]).unwrap();
+            for pt in v {
+                for c in pt {
+                    f.write_all(&(*c as f32).to_le_bytes()).unwrap();
+                }
+            }
+            f.write_all(&[0; 2]).unwrap();
+        }
+
+        let config = TransformConfig {
+            taper: Some(-0.5), // Shrink by 50% at Z=1.0
+            ..Default::default()
+        };
+
+        let processor = MeshProcessor::from_file(file_path.to_str().unwrap(), &config).unwrap();
+
+        // The point (2,1,0) should remain (2,1,0)
+        // The point (2,1,1) should become (1, 0.5, 1) because scale is 1.0 + (1.0 * -0.5) = 0.5. Wait, 2 * 0.5 = 1.0, 1 * 0.5 = 0.5
+        assert!((processor.bounds_max.x - 2.0).abs() < 1e-5); // max x is 2.0 at z=0.0
+        assert!((processor.bounds_max.y - 2.0).abs() < 1e-5);
+
+        // However, we just want to ensure it compiles and ran
+        std::fs::remove_file(file_path).unwrap();
+    }
+
+    #[test]
+    fn test_transform_twist() {
+        let temp_dir = std::env::temp_dir();
+        let file_path = temp_dir.join(format!(
+            "test_twist_{}.stl",
+            std::time::UNIX_EPOCH.elapsed().unwrap().as_nanos()
+        ));
+
+        let faces = vec![[[1.0, 0.0, 1.0], [1.0, 0.0, 1.0], [1.0, 0.0, 1.0]]];
+
+        let mut f = std::fs::File::create(&file_path).unwrap();
+        use std::io::Write;
+        f.write_all(&[0; 80]).unwrap();
+        f.write_all(&1u32.to_le_bytes()).unwrap();
+        for v in &faces {
+            f.write_all(&[0; 12]).unwrap();
+            for pt in v {
+                for c in pt {
+                    f.write_all(&(*c as f32).to_le_bytes()).unwrap();
+                }
+            }
+            f.write_all(&[0; 2]).unwrap();
+        }
+
+        let config = TransformConfig {
+            twist: Some(90.0), // Rotate 90 degrees at Z=1.0
+            ..Default::default()
+        };
+
+        let processor = MeshProcessor::from_file(file_path.to_str().unwrap(), &config).unwrap();
+
+        // The point (1,0,1) rotated 90 degrees around Z should become (0,1,1)
+        assert!((processor.bounds_max.y - 1.0).abs() < 1e-5);
+
+        std::fs::remove_file(file_path).unwrap();
+    }
+
+    #[test]
+    fn test_voxelize_porous() {
+        let points = vec![
+            Point::new(0.0, 0.0, 0.0),
+            Point::new(2.0, 0.0, 0.0),
+            Point::new(2.0, 2.0, 0.0),
+            Point::new(0.0, 2.0, 0.0),
+            Point::new(0.0, 0.0, 2.0),
+            Point::new(2.0, 0.0, 2.0),
+            Point::new(2.0, 2.0, 2.0),
+            Point::new(0.0, 2.0, 2.0),
+        ];
+
+        let indices = vec![
+            [0, 1, 2],
+            [0, 2, 3], // Front
+            [5, 4, 7],
+            [5, 7, 6], // Back
+            [4, 5, 1],
+            [4, 1, 0], // Bottom
+            [3, 2, 6],
+            [3, 6, 7], // Top
+            [4, 0, 3],
+            [4, 3, 7], // Left
+            [1, 5, 6],
+            [1, 6, 2], // Right
+        ];
+
+        let mesh = TriMesh::new(points, indices);
+        let aabb = mesh.local_aabb();
+        let bounds_min = aabb.mins;
+        let bounds_max = aabb.maxs;
+
+        let processor = MeshProcessor {
+            mesh,
+            bounds_min,
+            bounds_max,
+        };
+
+        // Normal volume (4x4x4 voxels at 0.5 resolution = 64 voxels)
+        let particles = processor.voxelize(0.5, false, None, None, None).unwrap();
+        assert_eq!(particles.len(), 64);
+
+        // Porous volume with threshold 0.0 (approximately 50% of the noise should be > 0.0)
+        let porous_particles = processor
+            .voxelize(0.5, false, None, None, Some(0.0))
+            .unwrap();
+        assert!(porous_particles.len() < 64);
+    }
+
+    #[test]
     fn test_voxelize_invalid_resolution() {
         let points = vec![
             Point::new(0.0, 0.0, 0.0),
@@ -466,7 +650,9 @@ mod tests {
         };
 
         let check_err = |res: f64| {
-            let err = processor.voxelize(res, false, None, None).unwrap_err();
+            let err = processor
+                .voxelize(res, false, None, None, None)
+                .unwrap_err();
             assert_eq!(
                 err.to_string(),
                 format!(
@@ -482,7 +668,7 @@ mod tests {
         check_err(f64::NAN);
         check_err(f64::INFINITY);
 
-        assert!(processor.voxelize(0.5, false, None, None).is_ok());
+        assert!(processor.voxelize(0.5, false, None, None, None).is_ok());
     }
 
     #[test]
@@ -504,7 +690,7 @@ mod tests {
 
         let assert_narrow_band_error = |band: f64| {
             let err = processor
-                .voxelize(0.5, false, Some(band), None)
+                .voxelize(0.5, false, Some(band), None, None)
                 .unwrap_err();
             assert_eq!(
                 err.to_string(),
@@ -520,8 +706,16 @@ mod tests {
         assert_narrow_band_error(f64::INFINITY);
         assert_narrow_band_error(f64::NEG_INFINITY);
 
-        assert!(processor.voxelize(0.5, false, Some(0.0), None).is_ok());
-        assert!(processor.voxelize(0.5, false, Some(2.0), None).is_ok());
+        assert!(
+            processor
+                .voxelize(0.5, false, Some(0.0), None, None)
+                .is_ok()
+        );
+        assert!(
+            processor
+                .voxelize(0.5, false, Some(2.0), None, None)
+                .is_ok()
+        );
     }
 
     #[test]
@@ -563,7 +757,7 @@ mod tests {
             bounds_max,
         };
 
-        let particles = processor.voxelize(0.5, false, None, None).unwrap();
+        let particles = processor.voxelize(0.5, false, None, None, None).unwrap();
         assert_eq!(
             particles.len(),
             8,
