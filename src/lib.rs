@@ -37,6 +37,8 @@ pub struct TransformConfig {
     pub rotate: Option<[f64; 3]>,  // x, y, z in degrees
     pub crop: Option<[f64; 6]>,    // min_x, min_y, min_z, max_x, max_y, max_z
     pub vertex_noise: Option<f64>, // random displacement amplitude
+    pub twist: Option<f64>,
+    pub taper: Option<f64>,
 }
 
 impl Default for TransformConfig {
@@ -48,6 +50,8 @@ impl Default for TransformConfig {
             rotate: None,
             crop: None,
             vertex_noise: None,
+            twist: None,
+            taper: None,
         }
     }
 }
@@ -71,86 +75,114 @@ impl MeshProcessor {
             None => anyhow::bail!("Missing file extension"),
         };
 
-        if let Some(r) = transform.rotate {
+        // PASS 1: Rotation, Scaling, Twist, Taper + Bounding Box
+        let rotation = transform.rotate.map(|r| {
             let rx = r[0].to_radians();
             let ry = r[1].to_radians();
             let rz = r[2].to_radians();
-
             let rot_x = nalgebra::Rotation3::from_axis_angle(&nalgebra::Vector3::x_axis(), rx);
             let rot_y = nalgebra::Rotation3::from_axis_angle(&nalgebra::Vector3::y_axis(), ry);
             let rot_z = nalgebra::Rotation3::from_axis_angle(&nalgebra::Vector3::z_axis(), rz);
+            rot_z * rot_y * rot_x
+        });
 
-            let rotation = rot_z * rot_y * rot_x;
+        let mut min = Point3::new(f64::MAX, f64::MAX, f64::MAX);
+        let mut max = Point3::new(f64::MIN, f64::MIN, f64::MIN);
 
-            for p in &mut points {
-                *p = rotation * *p;
+        let do_scale = (transform.scale - 1.0).abs() > f64::EPSILON;
+        let scale = transform.scale;
+        let twist_rate = transform.twist.unwrap_or(0.0);
+        let taper_factor = transform.taper.unwrap_or(0.0);
+
+        for p in &mut points {
+            if let Some(rot) = rotation {
+                *p = rot * *p;
             }
+            if do_scale {
+                p.x *= scale;
+                p.y *= scale;
+                p.z *= scale;
+            }
+            if twist_rate != 0.0 {
+                // Twist around Z axis proportional to Z height
+                let angle = twist_rate * p.z;
+                let cos_a = angle.cos();
+                let sin_a = angle.sin();
+                let nx = p.x * cos_a - p.y * sin_a;
+                let ny = p.x * sin_a + p.y * cos_a;
+                p.x = nx;
+                p.y = ny;
+            }
+            if taper_factor != 0.0 {
+                // Taper radially proportional to Z height
+                let factor = 1.0 + taper_factor * p.z;
+                p.x *= factor;
+                p.y *= factor;
+            }
+            min.x = min.x.min(p.x);
+            min.y = min.y.min(p.y);
+            min.z = min.z.min(p.z);
+            max.x = max.x.max(p.x);
+            max.y = max.y.max(p.y);
+            max.z = max.z.max(p.z);
         }
 
-        if transform.center {
-            let mut min = Point3::new(f64::MAX, f64::MAX, f64::MAX);
-            let mut max = Point3::new(f64::MIN, f64::MIN, f64::MIN);
-            for p in &points {
-                min.x = min.x.min(p.x);
-                min.y = min.y.min(p.y);
-                min.z = min.z.min(p.z);
-                max.x = max.x.max(p.x);
-                max.y = max.y.max(p.y);
-                max.z = max.z.max(p.z);
-            }
-            let center = Point3::new(
+        // PASS 2: Center, Translation, Noise + Final Bounding Box
+        let mut bounds_min = Point3::new(f64::MAX, f64::MAX, f64::MAX);
+        let mut bounds_max = Point3::new(f64::MIN, f64::MIN, f64::MIN);
+
+        let center_offset = if transform.center {
+            Point3::new(
                 (min.x + max.x) * 0.5,
                 (min.y + max.y) * 0.5,
                 (min.z + max.z) * 0.5,
-            );
-            for p in &mut points {
-                p.x -= center.x;
-                p.y -= center.y;
-                p.z -= center.z;
-            }
-        }
+            )
+        } else {
+            Point3::new(0.0, 0.0, 0.0)
+        };
 
-        if (transform.scale - 1.0).abs() > f64::EPSILON {
-            for p in &mut points {
-                p.x *= transform.scale;
-                p.y *= transform.scale;
-                p.z *= transform.scale;
-            }
-        }
+        let tx = transform.translate.map(|t| t[0]).unwrap_or(0.0);
+        let ty = transform.translate.map(|t| t[1]).unwrap_or(0.0);
+        let tz = transform.translate.map(|t| t[2]).unwrap_or(0.0);
 
-        if let Some(t) = transform.translate {
-            for p in &mut points {
-                p.x += t[0];
-                p.y += t[1];
-                p.z += t[2];
-            }
-        }
+        let amp = transform.vertex_noise.unwrap_or(0.0);
+        let mut seed = 123456789u32;
 
-        #[allow(clippy::collapsible_if)]
-        if let Some(amp) = transform.vertex_noise {
+        for p in &mut points {
+            if transform.center {
+                p.x -= center_offset.x;
+                p.y -= center_offset.y;
+                p.z -= center_offset.z;
+            }
+            p.x += tx;
+            p.y += ty;
+            p.z += tz;
+
             if amp > 0.0 {
-                // Simple, fast pseudo-random number generator for noise
-                let mut seed = 123456789u32;
-                for p in &mut points {
-                    seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
-                    let rx = (seed as f64 / u32::MAX as f64) * 2.0 - 1.0;
-                    seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
-                    let ry = (seed as f64 / u32::MAX as f64) * 2.0 - 1.0;
-                    seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
-                    let rz = (seed as f64 / u32::MAX as f64) * 2.0 - 1.0;
+                seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+                let rx = (seed as f64 / u32::MAX as f64) * 2.0 - 1.0;
+                seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+                let ry = (seed as f64 / u32::MAX as f64) * 2.0 - 1.0;
+                seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+                let rz = (seed as f64 / u32::MAX as f64) * 2.0 - 1.0;
 
-                    p.x += rx * amp;
-                    p.y += ry * amp;
-                    p.z += rz * amp;
-                }
+                p.x += rx * amp;
+                p.y += ry * amp;
+                p.z += rz * amp;
             }
+
+            bounds_min.x = bounds_min.x.min(p.x);
+            bounds_min.y = bounds_min.y.min(p.y);
+            bounds_min.z = bounds_min.z.min(p.z);
+            bounds_max.x = bounds_max.x.max(p.x);
+            bounds_max.y = bounds_max.y.max(p.y);
+            bounds_max.z = bounds_max.z.max(p.z);
         }
 
         let mesh = TriMesh::new(points, indices);
-        let aabb = mesh.local_aabb();
 
-        let mut bounds_min = aabb.mins;
-        let mut bounds_max = aabb.maxs;
+        // aabb is no longer needed since we computed the bounds manually.
+        // let aabb = mesh.local_aabb();
 
         if let Some(crop) = transform.crop {
             bounds_min.x = bounds_min.x.max(crop[0]);
@@ -252,6 +284,7 @@ impl MeshProcessor {
         surface_only: bool,
         narrow_band: Option<f64>,
         phase_sphere: Option<[f64; 4]>,
+        porous: Option<f64>,
     ) -> Result<Vec<ParticleData>> {
         if !resolution.is_finite() || resolution <= 1e-6 {
             anyhow::bail!(
@@ -333,12 +366,31 @@ impl MeshProcessor {
                     // Because rays are cast along the +X direction, doing X sequentially
                     // keeps the raycast traversals in the same BVH region,
                     // while parallelizing over (Y, Z) ensures finer granularity for Rayon.
+
+                    let mut seed = 987654321u32
+                        .wrapping_add(iy as u32)
+                        .wrapping_mul(1664525)
+                        .wrapping_add(iz as u32);
+                    let mut is_porous_skip = || -> bool {
+                        if let Some(p) = porous {
+                            seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+                            let rand_val = (seed as f64) / (u32::MAX as f64);
+                            if rand_val < p {
+                                return true;
+                            }
+                        }
+                        false
+                    };
+
                     if surface_only {
                         let half_res = resolution * 0.5;
                         let cuboid = Cuboid::new(Vector::new(half_res, half_res, half_res));
                         let mesh_iso = Isometry::identity();
 
                         for ix in 0..nx {
+                            if is_porous_skip() {
+                                continue;
+                            }
                             let x = bounds_min.x + (ix as f64 * resolution) + (resolution * 0.5);
                             let point = Point::new(x, y, z);
                             let voxel_iso = Isometry::translation(point.x, point.y, point.z);
@@ -388,6 +440,9 @@ impl MeshProcessor {
                         }
                     } else {
                         for ix in 0..nx {
+                            if is_porous_skip() {
+                                continue;
+                            }
                             let x = bounds_min.x + (ix as f64 * resolution) + (resolution * 0.5);
                             let point_3d = Point::new(x, y, z);
 
@@ -466,7 +521,9 @@ mod tests {
         };
 
         let check_err = |res: f64| {
-            let err = processor.voxelize(res, false, None, None).unwrap_err();
+            let err = processor
+                .voxelize(res, false, None, None, None)
+                .unwrap_err();
             assert_eq!(
                 err.to_string(),
                 format!(
@@ -482,7 +539,7 @@ mod tests {
         check_err(f64::NAN);
         check_err(f64::INFINITY);
 
-        assert!(processor.voxelize(0.5, false, None, None).is_ok());
+        assert!(processor.voxelize(0.5, false, None, None, None).is_ok());
     }
 
     #[test]
@@ -504,7 +561,7 @@ mod tests {
 
         let assert_narrow_band_error = |band: f64| {
             let err = processor
-                .voxelize(0.5, false, Some(band), None)
+                .voxelize(0.5, false, Some(band), None, None)
                 .unwrap_err();
             assert_eq!(
                 err.to_string(),
@@ -520,8 +577,16 @@ mod tests {
         assert_narrow_band_error(f64::INFINITY);
         assert_narrow_band_error(f64::NEG_INFINITY);
 
-        assert!(processor.voxelize(0.5, false, Some(0.0), None).is_ok());
-        assert!(processor.voxelize(0.5, false, Some(2.0), None).is_ok());
+        assert!(
+            processor
+                .voxelize(0.5, false, Some(0.0), None, None)
+                .is_ok()
+        );
+        assert!(
+            processor
+                .voxelize(0.5, false, Some(2.0), None, None)
+                .is_ok()
+        );
     }
 
     #[test]
@@ -563,7 +628,7 @@ mod tests {
             bounds_max,
         };
 
-        let particles = processor.voxelize(0.5, false, None, None).unwrap();
+        let particles = processor.voxelize(0.5, false, None, None, None).unwrap();
         assert_eq!(
             particles.len(),
             8,
@@ -787,5 +852,132 @@ mod tests {
         assert!((processor.bounds_max.y - 1.0).abs() < 1e-5);
 
         std::fs::remove_file(file_path).unwrap();
+    }
+    #[test]
+    fn test_twist_transformation() {
+        let temp_dir = std::env::temp_dir();
+        let file_path = temp_dir.join(format!(
+            "test_twist_{}.stl",
+            std::time::UNIX_EPOCH.elapsed().unwrap().as_nanos()
+        ));
+
+        // Create a tall box to easily see twist effects
+        let faces = vec![[1.0, 0.0, 0.0], [1.0, 0.0, 10.0], [0.0, 1.0, 10.0]];
+
+        let mut f = std::fs::File::create(&file_path).unwrap();
+        use std::io::Write;
+        f.write_all(&[0; 80]).unwrap();
+        f.write_all(&1u32.to_le_bytes()).unwrap();
+        f.write_all(&[0; 12]).unwrap();
+        for v in &faces {
+            for c in v {
+                f.write_all(&(*c as f32).to_le_bytes()).unwrap();
+            }
+        }
+        f.write_all(&[0; 2]).unwrap();
+
+        let config = TransformConfig {
+            twist: Some(std::f64::consts::PI / 20.0), // 90 degrees at z=10
+            ..Default::default()
+        };
+
+        let processor = MeshProcessor::from_file(file_path.to_str().unwrap(), &config).unwrap();
+
+        // At z=0, point (1,0,0) should remain (1,0,0)
+        // At z=10, angle is PI/2, so point (1,0,10) becomes (0,1,10)
+        assert!((processor.bounds_max.x - 1.0).abs() < 1e-5);
+        assert!((processor.bounds_max.y - 1.0).abs() < 1e-5);
+        assert!((processor.bounds_max.z - 10.0).abs() < 1e-5);
+
+        std::fs::remove_file(file_path).unwrap();
+    }
+
+    #[test]
+    fn test_taper_transformation() {
+        let temp_dir = std::env::temp_dir();
+        let file_path = temp_dir.join(format!(
+            "test_taper_{}.stl",
+            std::time::UNIX_EPOCH.elapsed().unwrap().as_nanos()
+        ));
+
+        let faces = vec![[1.0, 0.0, 0.0], [1.0, 0.0, 10.0], [0.0, 1.0, 10.0]];
+
+        let mut f = std::fs::File::create(&file_path).unwrap();
+        use std::io::Write;
+        f.write_all(&[0; 80]).unwrap();
+        f.write_all(&1u32.to_le_bytes()).unwrap();
+        f.write_all(&[0; 12]).unwrap();
+        for v in &faces {
+            for c in v {
+                f.write_all(&(*c as f32).to_le_bytes()).unwrap();
+            }
+        }
+        f.write_all(&[0; 2]).unwrap();
+
+        let config = TransformConfig {
+            taper: Some(0.1), // factor = 1.0 + 0.1 * z
+            ..Default::default()
+        };
+
+        let processor = MeshProcessor::from_file(file_path.to_str().unwrap(), &config).unwrap();
+
+        // At z=0, factor = 1.0 -> max_x = 1.0
+        // At z=10, factor = 2.0 -> point (1,0,10) becomes (2,0,10), point (0,1,10) becomes (0,2,10)
+        assert!((processor.bounds_max.x - 2.0).abs() < 1e-5);
+        assert!((processor.bounds_max.y - 2.0).abs() < 1e-5);
+        assert!((processor.bounds_max.z - 10.0).abs() < 1e-5);
+
+        std::fs::remove_file(file_path).unwrap();
+    }
+
+    #[test]
+    fn test_porous_generation() {
+        let points = vec![
+            Point::new(0.0, 0.0, 0.0),
+            Point::new(10.0, 0.0, 0.0),
+            Point::new(10.0, 10.0, 0.0),
+            Point::new(0.0, 10.0, 0.0),
+            Point::new(0.0, 0.0, 10.0),
+            Point::new(10.0, 0.0, 10.0),
+            Point::new(10.0, 10.0, 10.0),
+            Point::new(0.0, 10.0, 10.0),
+        ];
+
+        let indices = vec![
+            [0, 1, 2],
+            [0, 2, 3], // Front
+            [5, 4, 7],
+            [5, 7, 6], // Back
+            [4, 5, 1],
+            [4, 1, 0], // Bottom
+            [3, 2, 6],
+            [3, 6, 7], // Top
+            [4, 0, 3],
+            [4, 3, 7], // Left
+            [1, 5, 6],
+            [1, 6, 2], // Right
+        ];
+
+        let mesh = TriMesh::new(points, indices);
+        let aabb = mesh.local_aabb();
+        let bounds_min = aabb.mins;
+        let bounds_max = aabb.maxs;
+
+        let processor = MeshProcessor {
+            mesh,
+            bounds_min,
+            bounds_max,
+        };
+
+        let particles_full = processor.voxelize(0.5, false, None, None, None).unwrap();
+        let particles_porous = processor
+            .voxelize(0.5, false, None, None, Some(0.5))
+            .unwrap();
+
+        assert!(particles_full.len() > 0);
+        assert!(particles_porous.len() > 0);
+        // With porous=0.5, we expect roughly half the particles.
+        // Just checking that it strictly removed some particles.
+        assert!(particles_porous.len() < particles_full.len());
     }
 }
