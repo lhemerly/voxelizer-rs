@@ -252,6 +252,7 @@ impl MeshProcessor {
         surface_only: bool,
         narrow_band: Option<f64>,
         phase_sphere: Option<[f64; 4]>,
+        porous: Option<f64>,
     ) -> Result<Vec<ParticleData>> {
         if !resolution.is_finite() || resolution <= 1e-6 {
             anyhow::bail!(
@@ -305,6 +306,46 @@ impl MeshProcessor {
                     let mut local_particles = Vec::with_capacity(nx as usize);
                     let y = bounds_min.y + (iy as f64 * resolution) + (resolution * 0.5);
                     let z = bounds_min.z + (iz as f64 * resolution) + (resolution * 0.5);
+
+                    let add_particle =
+                        |x: f64, sdf: f32, local_particles: &mut Vec<ParticleData>| {
+                            if let Some(porosity) = porous {
+                                let mut seed = (iy as u32)
+                                    .wrapping_mul(73856093)
+                                    .wrapping_add((iz as u32).wrapping_mul(19349663));
+                                // Add a mix-in step with `x` coordinate representation (casted to u32) to ensure variation along the scanline
+                                seed =
+                                    seed.wrapping_add((x.to_bits() as u32).wrapping_mul(83492791));
+
+                                // LCG
+                                seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+
+                                if (seed as f64 / u32::MAX as f64) < porosity {
+                                    return;
+                                }
+                            }
+
+                            let mut phase = 0;
+                            if let Some(sphere) = phase_sphere {
+                                let dx = x - sphere[0];
+                                let dy = y - sphere[1];
+                                let dz = z - sphere[2];
+                                let r2 = sphere[3] * sphere[3];
+                                if dx * dx + dy * dy + dz * dz <= r2 {
+                                    phase = 1;
+                                }
+                            }
+                            local_particles.push(ParticleData {
+                                x: x as f32,
+                                y: y as f32,
+                                z: z as f32,
+                                sdf,
+                                phase,
+                                label_id: 0,
+                                fiber_x: 0.0,
+                                fiber_y: 0.0,
+                            });
+                        };
 
                     // Extract raycasting to be available for both modes so SDF sign is consistent.
                     let start_x = self.bounds_min.x - 1.0;
@@ -363,26 +404,7 @@ impl MeshProcessor {
                                 };
 
                                 if keep {
-                                    let mut phase = 0;
-                                    if let Some(sphere) = phase_sphere {
-                                        let dx = x - sphere[0];
-                                        let dy = y - sphere[1];
-                                        let dz = z - sphere[2];
-                                        let r2 = sphere[3] * sphere[3];
-                                        if dx * dx + dy * dy + dz * dz <= r2 {
-                                            phase = 1;
-                                        }
-                                    }
-                                    local_particles.push(ParticleData {
-                                        x: x as f32,
-                                        y: y as f32,
-                                        z: z as f32,
-                                        sdf,
-                                        phase,
-                                        label_id: 0,
-                                        fiber_x: 0.0,
-                                        fiber_y: 0.0,
-                                    });
+                                    add_particle(x, sdf, &mut local_particles);
                                 }
                             }
                         }
@@ -409,26 +431,7 @@ impl MeshProcessor {
                             };
 
                             if keep {
-                                let mut phase = 0;
-                                if let Some(sphere) = phase_sphere {
-                                    let dx = x - sphere[0];
-                                    let dy = y - sphere[1];
-                                    let dz = z - sphere[2];
-                                    let r2 = sphere[3] * sphere[3];
-                                    if dx * dx + dy * dy + dz * dz <= r2 {
-                                        phase = 1;
-                                    }
-                                }
-                                local_particles.push(ParticleData {
-                                    x: x as f32,
-                                    y: y as f32,
-                                    z: z as f32,
-                                    sdf,
-                                    phase,
-                                    label_id: 0,
-                                    fiber_x: 0.0,
-                                    fiber_y: 0.0,
-                                });
+                                add_particle(x, sdf, &mut local_particles);
                             }
                         }
                     }
@@ -466,7 +469,9 @@ mod tests {
         };
 
         let check_err = |res: f64| {
-            let err = processor.voxelize(res, false, None, None).unwrap_err();
+            let err = processor
+                .voxelize(res, false, None, None, None)
+                .unwrap_err();
             assert_eq!(
                 err.to_string(),
                 format!(
@@ -482,7 +487,7 @@ mod tests {
         check_err(f64::NAN);
         check_err(f64::INFINITY);
 
-        assert!(processor.voxelize(0.5, false, None, None).is_ok());
+        assert!(processor.voxelize(0.5, false, None, None, None).is_ok());
     }
 
     #[test]
@@ -504,7 +509,7 @@ mod tests {
 
         let assert_narrow_band_error = |band: f64| {
             let err = processor
-                .voxelize(0.5, false, Some(band), None)
+                .voxelize(0.5, false, Some(band), None, None)
                 .unwrap_err();
             assert_eq!(
                 err.to_string(),
@@ -520,8 +525,16 @@ mod tests {
         assert_narrow_band_error(f64::INFINITY);
         assert_narrow_band_error(f64::NEG_INFINITY);
 
-        assert!(processor.voxelize(0.5, false, Some(0.0), None).is_ok());
-        assert!(processor.voxelize(0.5, false, Some(2.0), None).is_ok());
+        assert!(
+            processor
+                .voxelize(0.5, false, Some(0.0), None, None)
+                .is_ok()
+        );
+        assert!(
+            processor
+                .voxelize(0.5, false, Some(2.0), None, None)
+                .is_ok()
+        );
     }
 
     #[test]
@@ -563,7 +576,7 @@ mod tests {
             bounds_max,
         };
 
-        let particles = processor.voxelize(0.5, false, None, None).unwrap();
+        let particles = processor.voxelize(0.5, false, None, None, None).unwrap();
         assert_eq!(
             particles.len(),
             8,
@@ -787,5 +800,103 @@ mod tests {
         assert!((processor.bounds_max.y - 1.0).abs() < 1e-5);
 
         std::fs::remove_file(file_path).unwrap();
+    }
+
+    #[test]
+    fn test_voxelize_porous() {
+        let ball = parry3d::shape::Ball::new(5.0);
+        let (vertices, indices) = ball.to_trimesh(10, 10);
+
+        let mut points = Vec::new();
+        for v in vertices {
+            points.push(Point::new(v.x as f64, v.y as f64, v.z as f64));
+        }
+
+        let mesh = TriMesh::new(points, indices);
+        let bounds_min = Point3::new(-5.0, -5.0, -5.0);
+        let bounds_max = Point3::new(5.0, 5.0, 5.0);
+
+        let processor = MeshProcessor {
+            mesh,
+            bounds_min,
+            bounds_max,
+        };
+
+        let full_particles = processor.voxelize(0.5, false, None, None, None).unwrap();
+        let porous_particles = processor
+            .voxelize(0.5, false, None, None, Some(0.5))
+            .unwrap();
+
+        assert!(
+            porous_particles.len() < full_particles.len(),
+            "Expected fewer particles with porosity enabled"
+        );
+        assert!(
+            porous_particles.len() > 0,
+            "Expected some particles to remain with 0.5 porosity"
+        );
+    }
+
+    #[test]
+    fn test_phase_sphere_logic() {
+        let points = vec![
+            Point::new(0.0, 0.0, 0.0),
+            Point::new(1.0, 0.0, 0.0),
+            Point::new(1.0, 1.0, 0.0),
+            Point::new(0.0, 1.0, 0.0),
+            Point::new(0.0, 0.0, 1.0),
+            Point::new(1.0, 0.0, 1.0),
+            Point::new(1.0, 1.0, 1.0),
+            Point::new(0.0, 1.0, 1.0),
+        ];
+
+        let indices = vec![
+            [0, 1, 2],
+            [0, 2, 3], // Front
+            [5, 4, 7],
+            [5, 7, 6], // Back
+            [4, 5, 1],
+            [4, 1, 0], // Bottom
+            [3, 2, 6],
+            [3, 6, 7], // Top
+            [4, 0, 3],
+            [4, 3, 7], // Left
+            [1, 5, 6],
+            [1, 6, 2], // Right
+        ];
+
+        let mesh = TriMesh::new(points, indices);
+        let aabb = mesh.local_aabb();
+        let bounds_min = aabb.mins;
+        let bounds_max = aabb.maxs;
+
+        let processor = MeshProcessor {
+            mesh,
+            bounds_min,
+            bounds_max,
+        };
+
+        // 1x1x1 unit cube with resolution 0.5 will have 8 particles
+        // Centered sphere at (0,0,0) with radius 0.5 should cover only the particle at (0.25, 0.25, 0.25)
+        let particles = processor
+            .voxelize(0.5, false, None, Some([0.0, 0.0, 0.0, 0.5]), None)
+            .unwrap();
+
+        let mut phase_1_count = 0;
+        for p in &particles {
+            if p.phase == 1 {
+                phase_1_count += 1;
+                assert_eq!(p.x, 0.25);
+                assert_eq!(p.y, 0.25);
+                assert_eq!(p.z, 0.25);
+            } else {
+                assert_eq!(p.phase, 0);
+            }
+        }
+
+        assert_eq!(
+            phase_1_count, 1,
+            "Exactly one particle should be inside the phase sphere"
+        );
     }
 }
