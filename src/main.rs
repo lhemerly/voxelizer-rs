@@ -25,6 +25,9 @@ struct Args {
     #[arg(long, default_value_t = 1.0)]
     scale: f64,
 
+    #[arg(long, value_parser = parse_vec3)]
+    scale_xyz: Option<[f64; 3]>,
+
     #[arg(long)]
     center: bool,
 
@@ -43,74 +46,57 @@ struct Args {
     #[arg(long, value_parser = parse_vec4)]
     phase_sphere: Option<[f64; 4]>,
 
+    #[arg(long, value_parser = parse_vec2)]
+    infill_gyroid: Option<[f64; 2]>,
+
+    #[arg(long, value_parser = parse_vec2)]
+    infill_strut: Option<[f64; 2]>,
+
+    #[arg(long)]
+    shell_thickness: Option<f64>,
+
+    #[arg(long, value_parser = parse_vec3)]
+    fiber_radial: Option<[f64; 3]>,
+
+    #[arg(long, value_parser = parse_vec5)]
+    label_sphere: Option<[f64; 5]>,
+
     #[arg(long)]
     threads: Option<usize>,
 }
 
-fn parse_vec4(s: &str) -> Result<[f64; 4], String> {
+fn parse_vec_generic<const N: usize>(s: &str, expected: &str) -> Result<[f64; N], String> {
     let parts: Vec<&str> = s.split(',').collect();
-    if parts.len() != 4 {
-        return Err(format!("Expected 'x,y,z,radius', got '{}'", s));
+    if parts.len() != N {
+        return Err(format!("Expected '{expected}', got '{s}'"));
     }
-    let x = parts[0]
-        .parse()
-        .map_err(|_| format!("Invalid x: {}", parts[0]))?;
-    let y = parts[1]
-        .parse()
-        .map_err(|_| format!("Invalid y: {}", parts[1]))?;
-    let z = parts[2]
-        .parse()
-        .map_err(|_| format!("Invalid z: {}", parts[2]))?;
-    let w = parts[3]
-        .parse()
-        .map_err(|_| format!("Invalid radius: {}", parts[3]))?;
-    Ok([x, y, z, w])
+    let mut arr = [0.0; N];
+    for (i, p) in parts.iter().enumerate() {
+        arr[i] = p
+            .parse()
+            .map_err(|_| format!("Invalid value at index {i}: {p}"))?;
+    }
+    Ok(arr)
+}
+
+fn parse_vec2(s: &str) -> Result<[f64; 2], String> {
+    parse_vec_generic(s, "v0,v1")
+}
+
+fn parse_vec5(s: &str) -> Result<[f64; 5], String> {
+    parse_vec_generic(s, "x,y,z,radius,id")
+}
+
+fn parse_vec4(s: &str) -> Result<[f64; 4], String> {
+    parse_vec_generic(s, "x,y,z,radius")
 }
 
 fn parse_vec6(s: &str) -> Result<[f64; 6], String> {
-    let parts: Vec<&str> = s.split(',').collect();
-    if parts.len() != 6 {
-        return Err(format!(
-            "Expected 'min_x,min_y,min_z,max_x,max_y,max_z', got '{}'",
-            s
-        ));
-    }
-    let v0 = parts[0]
-        .parse()
-        .map_err(|_| format!("Invalid value: {}", parts[0]))?;
-    let v1 = parts[1]
-        .parse()
-        .map_err(|_| format!("Invalid value: {}", parts[1]))?;
-    let v2 = parts[2]
-        .parse()
-        .map_err(|_| format!("Invalid value: {}", parts[2]))?;
-    let v3 = parts[3]
-        .parse()
-        .map_err(|_| format!("Invalid value: {}", parts[3]))?;
-    let v4 = parts[4]
-        .parse()
-        .map_err(|_| format!("Invalid value: {}", parts[4]))?;
-    let v5 = parts[5]
-        .parse()
-        .map_err(|_| format!("Invalid value: {}", parts[5]))?;
-    Ok([v0, v1, v2, v3, v4, v5])
+    parse_vec_generic(s, "min_x,min_y,min_z,max_x,max_y,max_z")
 }
 
 fn parse_vec3(s: &str) -> Result<[f64; 3], String> {
-    let parts: Vec<&str> = s.split(',').collect();
-    if parts.len() != 3 {
-        return Err(format!("Expected 'x,y,z', got '{}'", s));
-    }
-    let x = parts[0]
-        .parse()
-        .map_err(|_| format!("Invalid x: {}", parts[0]))?;
-    let y = parts[1]
-        .parse()
-        .map_err(|_| format!("Invalid y: {}", parts[1]))?;
-    let z = parts[2]
-        .parse()
-        .map_err(|_| format!("Invalid z: {}", parts[2]))?;
-    Ok([x, y, z])
+    parse_vec_generic(s, "x,y,z")
 }
 
 fn validate_resolution(s: &str) -> Result<f64, String> {
@@ -150,11 +136,17 @@ fn main() -> anyhow::Result<()> {
 
     let transform = TransformConfig {
         scale: args.scale,
+        scale_xyz: args.scale_xyz,
         center: args.center,
         translate: args.translate,
         rotate: args.rotate,
         crop: args.crop,
         vertex_noise: args.vertex_noise,
+        infill_gyroid: args.infill_gyroid,
+        infill_strut: args.infill_strut,
+        shell_thickness: args.shell_thickness,
+        fiber_radial: args.fiber_radial,
+        label_sphere: args.label_sphere,
     };
 
     let processor = MeshProcessor::from_file(&args.input, &transform)?;
@@ -163,6 +155,7 @@ fn main() -> anyhow::Result<()> {
         args.surface_only,
         args.narrow_band,
         args.phase_sphere,
+        &transform,
     )?;
 
     println!("Generated {} particles.", particles.len());
