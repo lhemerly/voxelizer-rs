@@ -32,22 +32,34 @@ type MeshData = (Vec<Point<f64>>, Vec<[u32; 3]>);
 #[derive(Debug, Clone, Copy)]
 pub struct TransformConfig {
     pub scale: f64,
+    pub scale_xyz: Option<[f64; 3]>,
     pub center: bool,
     pub translate: Option<[f64; 3]>,
-    pub rotate: Option<[f64; 3]>,  // x, y, z in degrees
-    pub crop: Option<[f64; 6]>,    // min_x, min_y, min_z, max_x, max_y, max_z
-    pub vertex_noise: Option<f64>, // random displacement amplitude
+    pub rotate: Option<[f64; 3]>,        // x, y, z in degrees
+    pub crop: Option<[f64; 6]>,          // min_x, min_y, min_z, max_x, max_y, max_z
+    pub vertex_noise: Option<f64>,       // random displacement amplitude
+    pub infill_gyroid: Option<[f64; 2]>, // scale, thickness
+    pub infill_strut: Option<[f64; 2]>,  // spacing, thickness
+    pub shell_thickness: Option<f64>,
+    pub fiber_radial: Option<[f64; 3]>, // cx, cy, cz
+    pub label_sphere: Option<[f64; 5]>, // x, y, z, r, id
 }
 
 impl Default for TransformConfig {
     fn default() -> Self {
         Self {
             scale: 1.0,
+            scale_xyz: None,
             center: false,
             translate: None,
             rotate: None,
             crop: None,
             vertex_noise: None,
+            infill_gyroid: None,
+            infill_strut: None,
+            shell_thickness: None,
+            fiber_radial: None,
+            label_sphere: None,
         }
     }
 }
@@ -115,6 +127,14 @@ impl MeshProcessor {
                 p.x *= transform.scale;
                 p.y *= transform.scale;
                 p.z *= transform.scale;
+            }
+        }
+
+        if let Some(s) = transform.scale_xyz {
+            for p in &mut points {
+                p.x *= s[0];
+                p.y *= s[1];
+                p.z *= s[2];
             }
         }
 
@@ -252,6 +272,7 @@ impl MeshProcessor {
         surface_only: bool,
         narrow_band: Option<f64>,
         phase_sphere: Option<[f64; 4]>,
+        config: &TransformConfig,
     ) -> Result<Vec<ParticleData>> {
         if !resolution.is_finite() || resolution <= 1e-6 {
             anyhow::bail!(
@@ -373,15 +394,41 @@ impl MeshProcessor {
                                             phase = 1;
                                         }
                                     }
+
+                                    let mut fiber_x = 0.0;
+                                    let mut fiber_y = 0.0;
+                                    if let Some(focal) = config.fiber_radial {
+                                        let dx = x - focal[0];
+                                        let dy = y - focal[1];
+                                        let dz = z - focal[2];
+                                        let r = (dx * dx + dy * dy + dz * dz).sqrt();
+                                        if r > 1e-6 {
+                                            // azimuth and elevation based on focal point
+                                            fiber_x = dy.atan2(dx) as f32;
+                                            fiber_y = (dz / r).asin() as f32;
+                                        }
+                                    }
+
+                                    let mut label_id = 0;
+                                    if let Some(label) = config.label_sphere {
+                                        let dx = x - label[0];
+                                        let dy = y - label[1];
+                                        let dz = z - label[2];
+                                        let r2 = label[3] * label[3];
+                                        if dx * dx + dy * dy + dz * dz <= r2 {
+                                            label_id = label[4] as u32;
+                                        }
+                                    }
+
                                     local_particles.push(ParticleData {
                                         x: x as f32,
                                         y: y as f32,
                                         z: z as f32,
                                         sdf,
                                         phase,
-                                        label_id: 0,
-                                        fiber_x: 0.0,
-                                        fiber_y: 0.0,
+                                        label_id,
+                                        fiber_x,
+                                        fiber_y,
                                     });
                                 }
                             }
@@ -402,11 +449,62 @@ impl MeshProcessor {
                                 self.mesh.distance_to_local_point(&point_3d, false) as f32;
                             let sdf = if is_inside { -distance } else { distance };
 
-                            let keep = if let Some(band) = narrow_band {
+                            let mut keep = if let Some(band) = narrow_band {
                                 sdf.abs() <= band as f32
                             } else {
                                 sdf <= 0.0
                             };
+
+                            // Apply Infill and Shell Rules for Solid Mode
+                            if keep && sdf <= 0.0 {
+                                let mut is_shell = false;
+                                if let Some(shell_t) = config.shell_thickness {
+                                    if sdf >= -shell_t as f32 {
+                                        is_shell = true;
+                                    }
+                                }
+
+                                // Only apply infill if we aren't in the shell (or if shell isn't defined/we already failed it)
+                                if !is_shell {
+                                    if let Some(gyroid) = config.infill_gyroid {
+                                        let scale = gyroid[0];
+                                        let thickness = gyroid[1];
+                                        // Gyroid eq: sin(x)cos(y) + sin(y)cos(z) + sin(z)cos(x)
+                                        let gx = x * scale;
+                                        let gy = y * scale;
+                                        let gz = z * scale;
+                                        let val = gx.sin() * gy.cos()
+                                            + gy.sin() * gz.cos()
+                                            + gz.sin() * gx.cos();
+                                        if val.abs() > thickness {
+                                            keep = false;
+                                        }
+                                    } else if let Some(strut) = config.infill_strut {
+                                        let spacing = strut[0];
+                                        let thickness = strut[1];
+                                        let mx = (x % spacing).abs();
+                                        let my = (y % spacing).abs();
+                                        let mz = (z % spacing).abs();
+
+                                        // We want struts on edges. Let's carve out the middle of the cells.
+                                        let cx = (mx - spacing * 0.5).abs();
+                                        let cy = (my - spacing * 0.5).abs();
+                                        let cz = (mz - spacing * 0.5).abs();
+
+                                        let t = thickness * 0.5;
+                                        let on_x = cy < t && cz < t;
+                                        let on_y = cx < t && cz < t;
+                                        let on_z = cx < t && cy < t;
+
+                                        if !(on_x || on_y || on_z) {
+                                            keep = false;
+                                        }
+                                    } else if config.shell_thickness.is_some() {
+                                        // if it's not shell and there's no infill, it's hollow
+                                        keep = false;
+                                    }
+                                }
+                            }
 
                             if keep {
                                 let mut phase = 0;
@@ -419,15 +517,40 @@ impl MeshProcessor {
                                         phase = 1;
                                     }
                                 }
+
+                                let mut fiber_x = 0.0;
+                                let mut fiber_y = 0.0;
+                                if let Some(focal) = config.fiber_radial {
+                                    let dx = x - focal[0];
+                                    let dy = y - focal[1];
+                                    let dz = z - focal[2];
+                                    let r = (dx * dx + dy * dy + dz * dz).sqrt();
+                                    if r > 1e-6 {
+                                        fiber_x = dy.atan2(dx) as f32;
+                                        fiber_y = (dz / r).asin() as f32;
+                                    }
+                                }
+
+                                let mut label_id = 0;
+                                if let Some(label) = config.label_sphere {
+                                    let dx = x - label[0];
+                                    let dy = y - label[1];
+                                    let dz = z - label[2];
+                                    let r2 = label[3] * label[3];
+                                    if dx * dx + dy * dy + dz * dz <= r2 {
+                                        label_id = label[4] as u32;
+                                    }
+                                }
+
                                 local_particles.push(ParticleData {
                                     x: x as f32,
                                     y: y as f32,
                                     z: z as f32,
                                     sdf,
                                     phase,
-                                    label_id: 0,
-                                    fiber_x: 0.0,
-                                    fiber_y: 0.0,
+                                    label_id,
+                                    fiber_x,
+                                    fiber_y,
                                 });
                             }
                         }
@@ -465,8 +588,12 @@ mod tests {
             bounds_max,
         };
 
+        let config = TransformConfig::default();
+
         let check_err = |res: f64| {
-            let err = processor.voxelize(res, false, None, None).unwrap_err();
+            let err = processor
+                .voxelize(res, false, None, None, &config)
+                .unwrap_err();
             assert_eq!(
                 err.to_string(),
                 format!(
@@ -482,7 +609,7 @@ mod tests {
         check_err(f64::NAN);
         check_err(f64::INFINITY);
 
-        assert!(processor.voxelize(0.5, false, None, None).is_ok());
+        assert!(processor.voxelize(0.5, false, None, None, &config).is_ok());
     }
 
     #[test]
@@ -502,9 +629,10 @@ mod tests {
             bounds_max,
         };
 
+        let config = TransformConfig::default();
         let assert_narrow_band_error = |band: f64| {
             let err = processor
-                .voxelize(0.5, false, Some(band), None)
+                .voxelize(0.5, false, Some(band), None, &config)
                 .unwrap_err();
             assert_eq!(
                 err.to_string(),
@@ -520,8 +648,16 @@ mod tests {
         assert_narrow_band_error(f64::INFINITY);
         assert_narrow_band_error(f64::NEG_INFINITY);
 
-        assert!(processor.voxelize(0.5, false, Some(0.0), None).is_ok());
-        assert!(processor.voxelize(0.5, false, Some(2.0), None).is_ok());
+        assert!(
+            processor
+                .voxelize(0.5, false, Some(0.0), None, &config)
+                .is_ok()
+        );
+        assert!(
+            processor
+                .voxelize(0.5, false, Some(2.0), None, &config)
+                .is_ok()
+        );
     }
 
     #[test]
@@ -563,7 +699,8 @@ mod tests {
             bounds_max,
         };
 
-        let particles = processor.voxelize(0.5, false, None, None).unwrap();
+        let config = TransformConfig::default();
+        let particles = processor.voxelize(0.5, false, None, None, &config).unwrap();
         assert_eq!(
             particles.len(),
             8,
