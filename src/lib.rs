@@ -246,12 +246,17 @@ impl MeshProcessor {
         Ok((points, indices))
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn voxelize(
         &self,
         resolution: f64,
         surface_only: bool,
         narrow_band: Option<f64>,
         phase_sphere: Option<[f64; 4]>,
+        shell_thickness: Option<f64>,
+        infill_pattern: Option<&str>,
+        infill_scale: f64,
+        porosity: Option<f64>,
     ) -> Result<Vec<ParticleData>> {
         if !resolution.is_finite() || resolution <= 1e-6 {
             anyhow::bail!(
@@ -408,7 +413,74 @@ impl MeshProcessor {
                                 sdf <= 0.0
                             };
 
-                            if keep {
+                            let mut final_keep = keep;
+
+                            // Apply infill and porosity logic exclusively to the hollowed interior region
+                            if keep && !surface_only {
+                                let mut inside_shell = false;
+                                #[allow(clippy::collapsible_if)]
+                                if let Some(thickness) = shell_thickness {
+                                    if sdf.abs() <= thickness as f32 {
+                                        inside_shell = true;
+                                    }
+                                }
+
+                                if !inside_shell {
+                                    if let Some(pattern) = infill_pattern {
+                                        let sx = x * infill_scale;
+                                        let sy = y * infill_scale;
+                                        let sz = z * infill_scale;
+                                        match pattern.to_lowercase().as_str() {
+                                            "gyroid" => {
+                                                let val = sx.sin() * sy.cos()
+                                                    + sy.sin() * sz.cos()
+                                                    + sz.sin() * sx.cos();
+                                                if val <= 0.0 {
+                                                    final_keep = false;
+                                                }
+                                            }
+                                            "strut" => {
+                                                let r = 0.2;
+                                                let wx = (sx % 1.0).abs();
+                                                let wy = (sy % 1.0).abs();
+                                                let wz = (sz % 1.0).abs();
+                                                let on_x = wx < r && wy < r;
+                                                let on_y = wy < r && wz < r;
+                                                let on_z = wz < r && wx < r;
+                                                if !(on_x || on_y || on_z) {
+                                                    final_keep = false;
+                                                }
+                                            }
+                                            _ => {}
+                                        }
+                                    }
+
+                                    #[allow(clippy::collapsible_if)]
+                                    if final_keep {
+                                        if let Some(porosity_val) = porosity {
+                                            // Custom LCG for porosity as per memory guidelines
+                                            let mut seed = ((x * 1000.0) as i32 as u32)
+                                                .wrapping_mul(73856093)
+                                                .wrapping_add(
+                                                    ((y * 1000.0) as i32 as u32)
+                                                        .wrapping_mul(19349663),
+                                                )
+                                                .wrapping_add(
+                                                    ((z * 1000.0) as i32 as u32)
+                                                        .wrapping_mul(83492791),
+                                                );
+                                            seed =
+                                                seed.wrapping_mul(1664525).wrapping_add(1013904223);
+                                            let rand_val = (seed as f64) / (u32::MAX as f64);
+                                            if rand_val < porosity_val {
+                                                final_keep = false;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            if final_keep {
                                 let mut phase = 0;
                                 if let Some(sphere) = phase_sphere {
                                     let dx = x - sphere[0];
@@ -466,7 +538,9 @@ mod tests {
         };
 
         let check_err = |res: f64| {
-            let err = processor.voxelize(res, false, None, None).unwrap_err();
+            let err = processor
+                .voxelize(res, false, None, None, None, None, 1.0, None)
+                .unwrap_err();
             assert_eq!(
                 err.to_string(),
                 format!(
@@ -482,7 +556,11 @@ mod tests {
         check_err(f64::NAN);
         check_err(f64::INFINITY);
 
-        assert!(processor.voxelize(0.5, false, None, None).is_ok());
+        assert!(
+            processor
+                .voxelize(0.5, false, None, None, None, None, 1.0, None)
+                .is_ok()
+        );
     }
 
     #[test]
@@ -504,7 +582,7 @@ mod tests {
 
         let assert_narrow_band_error = |band: f64| {
             let err = processor
-                .voxelize(0.5, false, Some(band), None)
+                .voxelize(0.5, false, Some(band), None, None, None, 1.0, None)
                 .unwrap_err();
             assert_eq!(
                 err.to_string(),
@@ -520,8 +598,16 @@ mod tests {
         assert_narrow_band_error(f64::INFINITY);
         assert_narrow_band_error(f64::NEG_INFINITY);
 
-        assert!(processor.voxelize(0.5, false, Some(0.0), None).is_ok());
-        assert!(processor.voxelize(0.5, false, Some(2.0), None).is_ok());
+        assert!(
+            processor
+                .voxelize(0.5, false, Some(0.0), None, None, None, 1.0, None)
+                .is_ok()
+        );
+        assert!(
+            processor
+                .voxelize(0.5, false, Some(2.0), None, None, None, 1.0, None)
+                .is_ok()
+        );
     }
 
     #[test]
@@ -563,7 +649,9 @@ mod tests {
             bounds_max,
         };
 
-        let particles = processor.voxelize(0.5, false, None, None).unwrap();
+        let particles = processor
+            .voxelize(0.5, false, None, None, None, None, 1.0, None)
+            .unwrap();
         assert_eq!(
             particles.len(),
             8,
