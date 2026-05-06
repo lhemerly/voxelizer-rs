@@ -246,12 +246,17 @@ impl MeshProcessor {
         Ok((points, indices))
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn voxelize(
         &self,
         resolution: f64,
         surface_only: bool,
         narrow_band: Option<f64>,
         phase_sphere: Option<[f64; 4]>,
+        shell_thickness: Option<f64>,
+        gyroid_infill: Option<f64>,
+        strut_infill: Option<f64>,
+        porosity: Option<f64>,
     ) -> Result<Vec<ParticleData>> {
         if !resolution.is_finite() || resolution <= 1e-6 {
             anyhow::bail!(
@@ -402,11 +407,70 @@ impl MeshProcessor {
                                 self.mesh.distance_to_local_point(&point_3d, false) as f32;
                             let sdf = if is_inside { -distance } else { distance };
 
-                            let keep = if let Some(band) = narrow_band {
+                            let mut keep = if let Some(band) = narrow_band {
                                 sdf.abs() <= band as f32
                             } else {
                                 sdf <= 0.0
                             };
+
+                            if keep {
+                                let mut is_interior = true;
+                                if let Some(st) = shell_thickness {
+                                    is_interior = sdf <= -(st as f32);
+                                }
+
+                                if is_interior {
+                                    if let Some(scale) = gyroid_infill {
+                                        let k = 2.0 * std::f64::consts::PI / scale;
+                                        let val = (x * k).sin() * (y * k).cos()
+                                            + (y * k).sin() * (z * k).cos()
+                                            + (z * k).sin() * (x * k).cos();
+                                        if val >= 0.0 {
+                                            keep = false;
+                                        }
+                                    }
+
+                                    #[allow(clippy::collapsible_if)]
+                                    if keep {
+                                        if let Some(scale) = strut_infill {
+                                            let strut_radius = scale * 0.1; // Example arbitrary thickness
+                                            let mx = x % scale;
+                                            let my = y % scale;
+                                            let mz = z % scale;
+
+                                            // A simple grid of struts
+                                            let dist_x = (mx - scale * 0.5).abs();
+                                            let dist_y = (my - scale * 0.5).abs();
+                                            let dist_z = (mz - scale * 0.5).abs();
+
+                                            let in_x =
+                                                dist_y < strut_radius && dist_z < strut_radius;
+                                            let in_y =
+                                                dist_x < strut_radius && dist_z < strut_radius;
+                                            let in_z =
+                                                dist_x < strut_radius && dist_y < strut_radius;
+
+                                            if !(in_x || in_y || in_z) {
+                                                keep = false;
+                                            }
+                                        }
+                                    }
+
+                                    #[allow(clippy::collapsible_if)]
+                                    if keep {
+                                        if let Some(p) = porosity {
+                                            // spatial LCG
+                                            let seed = (x.to_bits() ^ y.to_bits() ^ z.to_bits())
+                                                .wrapping_mul(6364136223846793005)
+                                                .wrapping_add(1442695040888963407);
+                                            let rand_val = (seed >> 32) as f64 / 4294967296.0;
+                                            if rand_val < p {
+                                                keep = false;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
 
                             if keep {
                                 let mut phase = 0;
@@ -466,7 +530,9 @@ mod tests {
         };
 
         let check_err = |res: f64| {
-            let err = processor.voxelize(res, false, None, None).unwrap_err();
+            let err = processor
+                .voxelize(res, false, None, None, None, None, None, None)
+                .unwrap_err();
             assert_eq!(
                 err.to_string(),
                 format!(
@@ -482,7 +548,11 @@ mod tests {
         check_err(f64::NAN);
         check_err(f64::INFINITY);
 
-        assert!(processor.voxelize(0.5, false, None, None).is_ok());
+        assert!(
+            processor
+                .voxelize(0.5, false, None, None, None, None, None, None)
+                .is_ok()
+        );
     }
 
     #[test]
@@ -504,7 +574,7 @@ mod tests {
 
         let assert_narrow_band_error = |band: f64| {
             let err = processor
-                .voxelize(0.5, false, Some(band), None)
+                .voxelize(0.5, false, Some(band), None, None, None, None, None)
                 .unwrap_err();
             assert_eq!(
                 err.to_string(),
@@ -520,8 +590,16 @@ mod tests {
         assert_narrow_band_error(f64::INFINITY);
         assert_narrow_band_error(f64::NEG_INFINITY);
 
-        assert!(processor.voxelize(0.5, false, Some(0.0), None).is_ok());
-        assert!(processor.voxelize(0.5, false, Some(2.0), None).is_ok());
+        assert!(
+            processor
+                .voxelize(0.5, false, Some(0.0), None, None, None, None, None)
+                .is_ok()
+        );
+        assert!(
+            processor
+                .voxelize(0.5, false, Some(2.0), None, None, None, None, None)
+                .is_ok()
+        );
     }
 
     #[test]
@@ -563,7 +641,9 @@ mod tests {
             bounds_max,
         };
 
-        let particles = processor.voxelize(0.5, false, None, None).unwrap();
+        let particles = processor
+            .voxelize(0.5, false, None, None, None, None, None, None)
+            .unwrap();
         assert_eq!(
             particles.len(),
             8,
@@ -787,5 +867,101 @@ mod tests {
         assert!((processor.bounds_max.y - 1.0).abs() < 1e-5);
 
         std::fs::remove_file(file_path).unwrap();
+    }
+
+    fn create_test_cube() -> MeshProcessor {
+        let points = vec![
+            Point::new(0.0, 0.0, 0.0),
+            Point::new(10.0, 0.0, 0.0),
+            Point::new(10.0, 10.0, 0.0),
+            Point::new(0.0, 10.0, 0.0),
+            Point::new(0.0, 0.0, 10.0),
+            Point::new(10.0, 0.0, 10.0),
+            Point::new(10.0, 10.0, 10.0),
+            Point::new(0.0, 10.0, 10.0),
+        ];
+
+        let indices = vec![
+            [0, 1, 2],
+            [0, 2, 3], // Front
+            [5, 4, 7],
+            [5, 7, 6], // Back
+            [4, 5, 1],
+            [4, 1, 0], // Bottom
+            [3, 2, 6],
+            [3, 6, 7], // Top
+            [4, 0, 3],
+            [4, 3, 7], // Left
+            [1, 5, 6],
+            [1, 6, 2], // Right
+        ];
+
+        let mesh = TriMesh::new(points, indices);
+        let aabb = mesh.local_aabb();
+        MeshProcessor {
+            bounds_min: aabb.mins,
+            bounds_max: aabb.maxs,
+            mesh,
+        }
+    }
+
+    #[test]
+    fn test_voxelize_shell_thickness() {
+        let processor = create_test_cube();
+        let particles_solid = processor
+            .voxelize(1.0, false, None, None, None, None, None, None)
+            .unwrap();
+        // 10x10x10 cube with res 1.0 = 1000 voxels
+        assert_eq!(particles_solid.len(), 1000);
+
+        // Just providing a shell thickness without an infill will just classify it as interior
+        // but it won't discard anything on its own. We need porosity to actually drop them.
+        let particles_shell = processor
+            .voxelize(1.0, false, None, None, Some(1.5), None, None, Some(1.0))
+            .unwrap(); // 100% porosity inside
+        assert!(particles_shell.len() < 1000);
+        assert!(particles_shell.len() > 0);
+    }
+
+    #[test]
+    fn test_voxelize_gyroid_infill() {
+        let processor = create_test_cube();
+        let particles_solid = processor
+            .voxelize(1.0, false, None, None, None, None, None, None)
+            .unwrap();
+        let particles_gyroid = processor
+            .voxelize(1.0, false, None, None, None, Some(5.0), None, None)
+            .unwrap();
+
+        assert!(particles_gyroid.len() < particles_solid.len());
+        assert!(particles_gyroid.len() > 0);
+    }
+
+    #[test]
+    fn test_voxelize_strut_infill() {
+        let processor = create_test_cube();
+        let particles_solid = processor
+            .voxelize(1.0, false, None, None, None, None, None, None)
+            .unwrap();
+        let particles_strut = processor
+            .voxelize(1.0, false, None, None, None, None, Some(3.0), None)
+            .unwrap();
+
+        assert!(particles_strut.len() < particles_solid.len());
+        assert!(particles_strut.len() > 0);
+    }
+
+    #[test]
+    fn test_voxelize_porosity() {
+        let processor = create_test_cube();
+        let particles_solid = processor
+            .voxelize(1.0, false, None, None, None, None, None, None)
+            .unwrap();
+        let particles_porous = processor
+            .voxelize(1.0, false, None, None, None, None, None, Some(0.5))
+            .unwrap();
+
+        assert!(particles_porous.len() < particles_solid.len());
+        assert!(particles_porous.len() > 0);
     }
 }
