@@ -245,13 +245,17 @@ impl MeshProcessor {
 
         Ok((points, indices))
     }
-
+    #[allow(clippy::too_many_arguments)]
     pub fn voxelize(
         &self,
         resolution: f64,
         surface_only: bool,
         narrow_band: Option<f64>,
         phase_sphere: Option<[f64; 4]>,
+        shell_thickness: Option<f64>,
+        infill_mode: &str,
+        infill_scale: f64,
+        porosity: Option<f64>,
     ) -> Result<Vec<ParticleData>> {
         if !resolution.is_finite() || resolution <= 1e-6 {
             anyhow::bail!(
@@ -361,7 +365,6 @@ impl MeshProcessor {
                                 } else {
                                     true
                                 };
-
                                 if keep {
                                     let mut phase = 0;
                                     if let Some(sphere) = phase_sphere {
@@ -373,16 +376,74 @@ impl MeshProcessor {
                                             phase = 1;
                                         }
                                     }
-                                    local_particles.push(ParticleData {
-                                        x: x as f32,
-                                        y: y as f32,
-                                        z: z as f32,
-                                        sdf,
-                                        phase,
-                                        label_id: 0,
-                                        fiber_x: 0.0,
-                                        fiber_y: 0.0,
-                                    });
+
+                                    let is_in_shell = if let Some(thick) = shell_thickness {
+                                        sdf.abs() <= thick as f32
+                                    } else {
+                                        false
+                                    };
+
+                                    let mut keep_voxel = true;
+
+                                    if !is_in_shell && keep && !surface_only {
+                                        if infill_mode == "gyroid" {
+                                            let gx = x * infill_scale;
+                                            let gy = y * infill_scale;
+                                            let gz = z * infill_scale;
+                                            let val = gx.sin() * gy.cos()
+                                                + gy.sin() * gz.cos()
+                                                + gz.sin() * gx.cos();
+                                            if val > 0.0 {
+                                                keep_voxel = false;
+                                            }
+                                        } else if infill_mode == "strut" {
+                                            let grid_res = 1.0 / infill_scale;
+                                            let mut min_dist = f64::MAX;
+                                            let mods = [
+                                                x.rem_euclid(grid_res),
+                                                y.rem_euclid(grid_res),
+                                                z.rem_euclid(grid_res),
+                                            ];
+                                            for &m in &mods {
+                                                let d = m.min(grid_res - m);
+                                                if d < min_dist {
+                                                    min_dist = d;
+                                                }
+                                            }
+                                            if min_dist > 0.1 * grid_res {
+                                                keep_voxel = false;
+                                            }
+                                        }
+                                    }
+
+                                    #[allow(clippy::collapsible_if)]
+                                    if keep_voxel {
+                                        if let Some(prob) = porosity {
+                                            // Simple deterministic LCG for porosity based on coordinates
+                                            let hash =
+                                                (x.to_bits() ^ y.to_bits() ^ z.to_bits()) as u32;
+                                            let seed =
+                                                hash.wrapping_mul(1664525).wrapping_add(1013904223);
+                                            let r = seed as f64 / u32::MAX as f64;
+                                            if r < prob {
+                                                keep_voxel = false;
+                                            }
+                                        }
+                                    }
+
+                                    #[allow(clippy::collapsible_if)]
+                                    if keep_voxel {
+                                        local_particles.push(ParticleData {
+                                            x: x as f32,
+                                            y: y as f32,
+                                            z: z as f32,
+                                            sdf,
+                                            phase,
+                                            label_id: 0,
+                                            fiber_x: 0.0,
+                                            fiber_y: 0.0,
+                                        });
+                                    }
                                 }
                             }
                         }
@@ -407,7 +468,6 @@ impl MeshProcessor {
                             } else {
                                 sdf <= 0.0
                             };
-
                             if keep {
                                 let mut phase = 0;
                                 if let Some(sphere) = phase_sphere {
@@ -419,16 +479,73 @@ impl MeshProcessor {
                                         phase = 1;
                                     }
                                 }
-                                local_particles.push(ParticleData {
-                                    x: x as f32,
-                                    y: y as f32,
-                                    z: z as f32,
-                                    sdf,
-                                    phase,
-                                    label_id: 0,
-                                    fiber_x: 0.0,
-                                    fiber_y: 0.0,
-                                });
+
+                                let is_in_shell = if let Some(thick) = shell_thickness {
+                                    sdf.abs() <= thick as f32
+                                } else {
+                                    false
+                                };
+
+                                let mut keep_voxel = true;
+
+                                if !is_in_shell && keep && !surface_only {
+                                    if infill_mode == "gyroid" {
+                                        let gx = x * infill_scale;
+                                        let gy = y * infill_scale;
+                                        let gz = z * infill_scale;
+                                        let val = gx.sin() * gy.cos()
+                                            + gy.sin() * gz.cos()
+                                            + gz.sin() * gx.cos();
+                                        if val > 0.0 {
+                                            keep_voxel = false;
+                                        }
+                                    } else if infill_mode == "strut" {
+                                        let grid_res = 1.0 / infill_scale;
+                                        let mut min_dist = f64::MAX;
+                                        let mods = [
+                                            x.rem_euclid(grid_res),
+                                            y.rem_euclid(grid_res),
+                                            z.rem_euclid(grid_res),
+                                        ];
+                                        for &m in &mods {
+                                            let d = m.min(grid_res - m);
+                                            if d < min_dist {
+                                                min_dist = d;
+                                            }
+                                        }
+                                        if min_dist > 0.1 * grid_res {
+                                            keep_voxel = false;
+                                        }
+                                    }
+                                }
+
+                                #[allow(clippy::collapsible_if)]
+                                if keep_voxel {
+                                    if let Some(prob) = porosity {
+                                        // Simple deterministic LCG for porosity based on coordinates
+                                        let hash = (x.to_bits() ^ y.to_bits() ^ z.to_bits()) as u32;
+                                        let seed =
+                                            hash.wrapping_mul(1664525).wrapping_add(1013904223);
+                                        let r = seed as f64 / u32::MAX as f64;
+                                        if r < prob {
+                                            keep_voxel = false;
+                                        }
+                                    }
+                                }
+
+                                #[allow(clippy::collapsible_if)]
+                                if keep_voxel {
+                                    local_particles.push(ParticleData {
+                                        x: x as f32,
+                                        y: y as f32,
+                                        z: z as f32,
+                                        sdf,
+                                        phase,
+                                        label_id: 0,
+                                        fiber_x: 0.0,
+                                        fiber_y: 0.0,
+                                    });
+                                }
                             }
                         }
                     }
@@ -466,7 +583,9 @@ mod tests {
         };
 
         let check_err = |res: f64| {
-            let err = processor.voxelize(res, false, None, None).unwrap_err();
+            let err = processor
+                .voxelize(res, false, None, None, None, "solid", 1.0, None)
+                .unwrap_err();
             assert_eq!(
                 err.to_string(),
                 format!(
@@ -482,7 +601,11 @@ mod tests {
         check_err(f64::NAN);
         check_err(f64::INFINITY);
 
-        assert!(processor.voxelize(0.5, false, None, None).is_ok());
+        assert!(
+            processor
+                .voxelize(0.5, false, None, None, None, "solid", 1.0, None)
+                .is_ok()
+        );
     }
 
     #[test]
@@ -504,7 +627,7 @@ mod tests {
 
         let assert_narrow_band_error = |band: f64| {
             let err = processor
-                .voxelize(0.5, false, Some(band), None)
+                .voxelize(0.5, false, Some(band), None, None, "solid", 1.0, None)
                 .unwrap_err();
             assert_eq!(
                 err.to_string(),
@@ -520,8 +643,16 @@ mod tests {
         assert_narrow_band_error(f64::INFINITY);
         assert_narrow_band_error(f64::NEG_INFINITY);
 
-        assert!(processor.voxelize(0.5, false, Some(0.0), None).is_ok());
-        assert!(processor.voxelize(0.5, false, Some(2.0), None).is_ok());
+        assert!(
+            processor
+                .voxelize(0.5, false, Some(0.0), None, None, "solid", 1.0, None)
+                .is_ok()
+        );
+        assert!(
+            processor
+                .voxelize(0.5, false, Some(2.0), None, None, "solid", 1.0, None)
+                .is_ok()
+        );
     }
 
     #[test]
@@ -563,7 +694,9 @@ mod tests {
             bounds_max,
         };
 
-        let particles = processor.voxelize(0.5, false, None, None).unwrap();
+        let particles = processor
+            .voxelize(0.5, false, None, None, None, "solid", 1.0, None)
+            .unwrap();
         assert_eq!(
             particles.len(),
             8,
