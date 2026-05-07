@@ -44,6 +44,17 @@ struct Args {
     phase_sphere: Option<[f64; 4]>,
 
     #[arg(long)]
+    shell_thickness: Option<f64>,
+
+    #[arg(long, default_value_t = String::from("solid"))]
+    infill_mode: String,
+
+    #[arg(long, default_value_t = 1.0)]
+    infill_scale: f64,
+
+    #[arg(long)]
+    porosity: Option<f64>,
+    #[arg(long)]
     threads: Option<usize>,
 }
 
@@ -158,13 +169,17 @@ fn main() -> anyhow::Result<()> {
     };
 
     let processor = MeshProcessor::from_file(&args.input, &transform)?;
+
     let particles = processor.voxelize(
         args.resolution,
         args.surface_only,
         args.narrow_band,
         args.phase_sphere,
+        args.shell_thickness,
+        &args.infill_mode,
+        args.infill_scale,
+        args.porosity,
     )?;
-
     println!("Generated {} particles.", particles.len());
 
     let path_out = Path::new(&args.output);
