@@ -246,13 +246,21 @@ impl MeshProcessor {
         Ok((points, indices))
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn voxelize(
         &self,
         resolution: f64,
         surface_only: bool,
         narrow_band: Option<f64>,
         phase_sphere: Option<[f64; 4]>,
+        shell_thickness: Option<f64>,
+        infill_pattern: Option<&str>,
+        infill_scale: Option<f64>,
     ) -> Result<Vec<ParticleData>> {
+        if shell_thickness.is_some() && surface_only {
+            anyhow::bail!("Cannot use shell_thickness with surface_only mode.");
+        }
+
         if !resolution.is_finite() || resolution <= 1e-6 {
             anyhow::bail!(
                 "Resolution must be a finite number greater than 1e-6 to avoid excessive resource usage or division by zero. Provided: {}",
@@ -402,11 +410,37 @@ impl MeshProcessor {
                                 self.mesh.distance_to_local_point(&point_3d, false) as f32;
                             let sdf = if is_inside { -distance } else { distance };
 
-                            let keep = if let Some(band) = narrow_band {
+                            let mut keep = if let Some(band) = narrow_band {
                                 sdf.abs() <= band as f32
                             } else {
                                 sdf <= 0.0
                             };
+
+                            #[allow(clippy::collapsible_if)]
+                            if keep {
+                                if let Some(thickness) = shell_thickness {
+                                    if sdf < -(thickness as f32) {
+                                        keep = false;
+                                        if let Some(pattern) = infill_pattern {
+                                            let scale = infill_scale.unwrap_or(10.0);
+                                            match pattern {
+                                                "gyroid" => {
+                                                    let k = std::f64::consts::PI * 2.0 / scale;
+                                                    let val = (x * k).sin() * (y * k).cos() + (y * k).sin() * (z * k).cos() + (z * k).sin() * (x * k).cos();
+                                                    if val > 0.0 { keep = true; }
+                                                }
+                                                "grid" => {
+                                                    if x.rem_euclid(scale) < resolution || y.rem_euclid(scale) < resolution || z.rem_euclid(scale) < resolution { keep = true; }
+                                                }
+                                                "lines" => {
+                                                    if x.rem_euclid(scale) < resolution || y.rem_euclid(scale) < resolution { keep = true; }
+                                                }
+                                                _ => {}
+                                            }
+                                        }
+                                    }
+                                }
+                            }
 
                             if keep {
                                 let mut phase = 0;
@@ -466,7 +500,7 @@ mod tests {
         };
 
         let check_err = |res: f64| {
-            let err = processor.voxelize(res, false, None, None).unwrap_err();
+            let err = processor.voxelize(res, false, None, None, None, None, None).unwrap_err();
             assert_eq!(
                 err.to_string(),
                 format!(
@@ -482,7 +516,7 @@ mod tests {
         check_err(f64::NAN);
         check_err(f64::INFINITY);
 
-        assert!(processor.voxelize(0.5, false, None, None).is_ok());
+        assert!(processor.voxelize(0.5, false, None, None, None, None, None).is_ok());
     }
 
     #[test]
@@ -504,7 +538,7 @@ mod tests {
 
         let assert_narrow_band_error = |band: f64| {
             let err = processor
-                .voxelize(0.5, false, Some(band), None)
+                .voxelize(0.5, false, Some(band), None, None, None, None)
                 .unwrap_err();
             assert_eq!(
                 err.to_string(),
@@ -520,8 +554,8 @@ mod tests {
         assert_narrow_band_error(f64::INFINITY);
         assert_narrow_band_error(f64::NEG_INFINITY);
 
-        assert!(processor.voxelize(0.5, false, Some(0.0), None).is_ok());
-        assert!(processor.voxelize(0.5, false, Some(2.0), None).is_ok());
+        assert!(processor.voxelize(0.5, false, Some(0.0), None, None, None, None).is_ok());
+        assert!(processor.voxelize(0.5, false, Some(2.0), None, None, None, None).is_ok());
     }
 
     #[test]
@@ -563,7 +597,7 @@ mod tests {
             bounds_max,
         };
 
-        let particles = processor.voxelize(0.5, false, None, None).unwrap();
+        let particles = processor.voxelize(0.5, false, None, None, None, None, None).unwrap();
         assert_eq!(
             particles.len(),
             8,
@@ -574,6 +608,109 @@ mod tests {
             assert!(p.x == 0.25 || p.x == 0.75);
             assert!(p.y == 0.25 || p.y == 0.75);
             assert!(p.z == 0.25 || p.z == 0.75);
+        }
+    }
+
+    #[test]
+    fn test_hollow_shell() {
+        let points = vec![
+            Point::new(0.0, 0.0, 0.0),
+            Point::new(10.0, 0.0, 0.0),
+            Point::new(10.0, 10.0, 0.0),
+            Point::new(0.0, 10.0, 0.0),
+            Point::new(0.0, 0.0, 10.0),
+            Point::new(10.0, 0.0, 10.0),
+            Point::new(10.0, 10.0, 10.0),
+            Point::new(0.0, 10.0, 10.0),
+        ];
+
+        let indices = vec![
+            [0, 1, 2], [0, 2, 3], // Front
+            [5, 4, 7], [5, 7, 6], // Back
+            [4, 5, 1], [4, 1, 0], // Bottom
+            [3, 2, 6], [3, 6, 7], // Top
+            [4, 0, 3], [4, 3, 7], // Left
+            [1, 5, 6], [1, 6, 2], // Right
+        ];
+
+        let mesh = TriMesh::new(points, indices);
+        let aabb = mesh.local_aabb();
+        let bounds_min = aabb.mins;
+        let bounds_max = aabb.maxs;
+        let processor = MeshProcessor {
+            mesh,
+            bounds_min,
+            bounds_max,
+        };
+
+        // Standard solid voxelization at res=1.0 will create a 10x10x10 grid (1000 voxels).
+        let full = processor.voxelize(1.0, false, None, None, None, None, None).unwrap();
+        assert_eq!(full.len(), 1000);
+
+        // Hollowing with 1.0 thickness should carve out the center 8x8x8 region (512 voxels).
+        // Total should be 1000 - 512 = 488.
+        let shell = processor.voxelize(1.0, false, None, None, Some(1.0), None, None).unwrap();
+        assert_eq!(shell.len(), 488);
+
+        // Hollowing with a pattern should return a number between shell (488) and full (1000)
+        let infill = processor.voxelize(1.0, false, None, None, Some(1.0), Some("lines"), Some(5.0)).unwrap();
+        assert!(infill.len() > 488);
+        assert!(infill.len() < 1000);
+    }
+
+    #[test]
+    fn test_infill_grid() {
+        let points = vec![
+            Point::new(0.0, 0.0, 0.0),
+            Point::new(20.0, 0.0, 0.0),
+            Point::new(20.0, 20.0, 0.0),
+            Point::new(0.0, 20.0, 0.0),
+            Point::new(0.0, 0.0, 20.0),
+            Point::new(20.0, 0.0, 20.0),
+            Point::new(20.0, 20.0, 20.0),
+            Point::new(0.0, 20.0, 20.0),
+        ];
+
+        let indices = vec![
+            [0, 1, 2], [0, 2, 3], // Front
+            [5, 4, 7], [5, 7, 6], // Back
+            [4, 5, 1], [4, 1, 0], // Bottom
+            [3, 2, 6], [3, 6, 7], // Top
+            [4, 0, 3], [4, 3, 7], // Left
+            [1, 5, 6], [1, 6, 2], // Right
+        ];
+
+        let mesh = TriMesh::new(points, indices);
+        let aabb = mesh.local_aabb();
+        let bounds_min = aabb.mins;
+        let bounds_max = aabb.maxs;
+        let processor = MeshProcessor {
+            mesh,
+            bounds_min,
+            bounds_max,
+        };
+
+        // For a 20x20x20 cube at 1.0 res, hollowed out with shell_thickness=2.0
+        // The inside is roughly 16x16x16 (from x=2 to 18)
+        let shell = processor.voxelize(1.0, false, None, None, Some(2.0), None, None).unwrap();
+
+        let grid = processor.voxelize(1.0, false, None, None, Some(2.0), Some("grid"), Some(4.0)).unwrap();
+
+        // grid should have more than shell, but less than full solid
+        assert!(grid.len() > shell.len());
+
+        // Let's explicitly check some points in the grid
+        for p in &grid {
+            // Because our shell is 2.0, points inside are at least 2.0 distance from the edge.
+            // Meaning if a point is inside the hollow region (i.e. x in [2,18], y in [2,18], z in [2,18])
+            // it must either be part of the shell, or satisfy the grid condition:
+            let is_in_shell = p.x <= 2.5 || p.x >= 17.5 || p.y <= 2.5 || p.y >= 17.5 || p.z <= 2.5 || p.z >= 17.5;
+            if !is_in_shell {
+                let gx = p.x.rem_euclid(4.0) < 1.0;
+                let gy = p.y.rem_euclid(4.0) < 1.0;
+                let gz = p.z.rem_euclid(4.0) < 1.0;
+                assert!(gx || gy || gz, "Point ({}, {}, {}) must be part of grid", p.x, p.y, p.z);
+            }
         }
     }
 
