@@ -246,12 +246,17 @@ impl MeshProcessor {
         Ok((points, indices))
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn voxelize(
         &self,
         resolution: f64,
         surface_only: bool,
         narrow_band: Option<f64>,
         phase_sphere: Option<[f64; 4]>,
+        phase_box: Option<[f64; 6]>,
+        hollow: Option<f64>,
+        gyroid: Option<[f64; 2]>,
+        porous: Option<f64>,
     ) -> Result<Vec<ParticleData>> {
         if !resolution.is_finite() || resolution <= 1e-6 {
             anyhow::bail!(
@@ -373,6 +378,14 @@ impl MeshProcessor {
                                             phase = 1;
                                         }
                                     }
+                                    #[allow(clippy::collapsible_if)]
+                                    if let Some(box_coords) = phase_box {
+                                        if x >= box_coords[0] && x <= box_coords[3] &&
+                                           y >= box_coords[1] && y <= box_coords[4] &&
+                                           z >= box_coords[2] && z <= box_coords[5] {
+                                            phase = 1;
+                                        }
+                                    }
                                     local_particles.push(ParticleData {
                                         x: x as f32,
                                         y: y as f32,
@@ -402,11 +415,45 @@ impl MeshProcessor {
                                 self.mesh.distance_to_local_point(&point_3d, false) as f32;
                             let sdf = if is_inside { -distance } else { distance };
 
-                            let keep = if let Some(band) = narrow_band {
+                            let mut keep = if let Some(band) = narrow_band {
                                 sdf.abs() <= band as f32
                             } else {
                                 sdf <= 0.0
                             };
+
+                            // Check hollow
+                            let mut is_shell = false;
+                            #[allow(clippy::collapsible_if)]
+                            if keep && sdf <= 0.0 {
+                                if let Some(thickness) = hollow {
+                                    if -sdf <= thickness as f32 {
+                                        is_shell = true;
+                                    } else {
+                                        keep = false;
+                                    }
+                                }
+                            }
+
+                            // If not shell, it's interior
+                            if keep && sdf <= 0.0 && !is_shell {
+                                if let Some([period, thickness]) = gyroid {
+                                    let px = x * std::f64::consts::PI * 2.0 / period;
+                                    let py = y * std::f64::consts::PI * 2.0 / period;
+                                    let pz = z * std::f64::consts::PI * 2.0 / period;
+                                    let val = px.sin() * py.cos() + py.sin() * pz.cos() + pz.sin() * px.cos();
+                                    if val.abs() > thickness {
+                                        keep = false;
+                                    }
+                                } else if let Some(prob) = porous {
+                                    // simple LCG seeded by voxel position
+                                    let seed = (x.to_bits() ^ y.to_bits() ^ z.to_bits()) as u32;
+                                    let seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+                                    let r = seed as f64 / u32::MAX as f64;
+                                    if r < prob {
+                                        keep = false;
+                                    }
+                                }
+                            }
 
                             if keep {
                                 let mut phase = 0;
@@ -416,6 +463,14 @@ impl MeshProcessor {
                                     let dz = z - sphere[2];
                                     let r2 = sphere[3] * sphere[3];
                                     if dx * dx + dy * dy + dz * dz <= r2 {
+                                        phase = 1;
+                                    }
+                                }
+                                #[allow(clippy::collapsible_if)]
+                                if let Some(box_coords) = phase_box {
+                                    if x >= box_coords[0] && x <= box_coords[3] &&
+                                       y >= box_coords[1] && y <= box_coords[4] &&
+                                       z >= box_coords[2] && z <= box_coords[5] {
                                         phase = 1;
                                     }
                                 }
@@ -466,7 +521,7 @@ mod tests {
         };
 
         let check_err = |res: f64| {
-            let err = processor.voxelize(res, false, None, None).unwrap_err();
+            let err = processor.voxelize(res, false, None, None, None, None, None, None).unwrap_err();
             assert_eq!(
                 err.to_string(),
                 format!(
@@ -482,7 +537,7 @@ mod tests {
         check_err(f64::NAN);
         check_err(f64::INFINITY);
 
-        assert!(processor.voxelize(0.5, false, None, None).is_ok());
+        assert!(processor.voxelize(0.5, false, None, None, None, None, None, None).is_ok());
     }
 
     #[test]
@@ -504,7 +559,7 @@ mod tests {
 
         let assert_narrow_band_error = |band: f64| {
             let err = processor
-                .voxelize(0.5, false, Some(band), None)
+                .voxelize(0.5, false, Some(band), None, None, None, None, None)
                 .unwrap_err();
             assert_eq!(
                 err.to_string(),
@@ -520,8 +575,8 @@ mod tests {
         assert_narrow_band_error(f64::INFINITY);
         assert_narrow_band_error(f64::NEG_INFINITY);
 
-        assert!(processor.voxelize(0.5, false, Some(0.0), None).is_ok());
-        assert!(processor.voxelize(0.5, false, Some(2.0), None).is_ok());
+        assert!(processor.voxelize(0.5, false, Some(0.0), None, None, None, None, None).is_ok());
+        assert!(processor.voxelize(0.5, false, Some(2.0), None, None, None, None, None).is_ok());
     }
 
     #[test]
@@ -563,7 +618,7 @@ mod tests {
             bounds_max,
         };
 
-        let particles = processor.voxelize(0.5, false, None, None).unwrap();
+        let particles = processor.voxelize(0.5, false, None, None, None, None, None, None).unwrap();
         assert_eq!(
             particles.len(),
             8,

@@ -43,8 +43,34 @@ struct Args {
     #[arg(long, value_parser = parse_vec4)]
     phase_sphere: Option<[f64; 4]>,
 
+    #[arg(long, value_parser = parse_vec6)]
+    phase_box: Option<[f64; 6]>,
+
+    #[arg(long)]
+    hollow: Option<f64>,
+
+    #[arg(long, value_parser = parse_vec2)]
+    gyroid: Option<[f64; 2]>,
+
+    #[arg(long)]
+    porous: Option<f64>,
+
     #[arg(long)]
     threads: Option<usize>,
+}
+
+fn parse_vec2(s: &str) -> Result<[f64; 2], String> {
+    let parts: Vec<&str> = s.split(',').collect();
+    if parts.len() != 2 {
+        return Err(format!("Expected 'period,thickness', got '{}'", s));
+    }
+    let p0 = parts[0]
+        .parse()
+        .map_err(|_| format!("Invalid value: {}", parts[0]))?;
+    let p1 = parts[1]
+        .parse()
+        .map_err(|_| format!("Invalid value: {}", parts[1]))?;
+    Ok([p0, p1])
 }
 
 fn parse_vec4(s: &str) -> Result<[f64; 4], String> {
@@ -163,6 +189,10 @@ fn main() -> anyhow::Result<()> {
         args.surface_only,
         args.narrow_band,
         args.phase_sphere,
+        args.phase_box,
+        args.hollow,
+        args.gyroid,
+        args.porous,
     )?;
 
     println!("Generated {} particles.", particles.len());
