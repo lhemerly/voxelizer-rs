@@ -43,8 +43,28 @@ struct Args {
     #[arg(long, value_parser = parse_vec4)]
     phase_sphere: Option<[f64; 4]>,
 
+    #[arg(long, value_parser = parse_vec2)]
+    gyroid: Option<[f64; 2]>,
+
+    #[arg(long)]
+    shell_thickness: Option<f64>,
+
     #[arg(long)]
     threads: Option<usize>,
+}
+
+fn parse_vec2(s: &str) -> Result<[f64; 2], String> {
+    let parts: Vec<&str> = s.split(',').collect();
+    if parts.len() != 2 {
+        return Err(format!("Expected 'scale,thickness', got '{}'", s));
+    }
+    let x = parts[0]
+        .parse()
+        .map_err(|_| format!("Invalid scale: {}", parts[0]))?;
+    let y = parts[1]
+        .parse()
+        .map_err(|_| format!("Invalid thickness: {}", parts[1]))?;
+    Ok([x, y])
 }
 
 fn parse_vec4(s: &str) -> Result<[f64; 4], String> {
@@ -163,6 +183,8 @@ fn main() -> anyhow::Result<()> {
         args.surface_only,
         args.narrow_band,
         args.phase_sphere,
+        args.gyroid,
+        args.shell_thickness,
     )?;
 
     println!("Generated {} particles.", particles.len());
@@ -190,9 +212,35 @@ fn main() -> anyhow::Result<()> {
             writeln!(writer, "property float x")?;
             writeln!(writer, "property float y")?;
             writeln!(writer, "property float z")?;
+            writeln!(writer, "property uchar red")?;
+            writeln!(writer, "property uchar green")?;
+            writeln!(writer, "property uchar blue")?;
             writeln!(writer, "end_header")?;
             for p in &particles {
-                writeln!(writer, "{} {} {}", p.x, p.y, p.z)?;
+                // Map sdf to a simple heatmap: blue (inside), green (surface), red (outside)
+                let r: u8;
+                let g: u8;
+                let b: u8;
+                if p.sdf < -1.0 {
+                    r = 0; g = 0; b = 255;
+                } else if p.sdf > 1.0 {
+                    r = 255; g = 0; b = 0;
+                } else {
+                    // map [-1, 1] to a gradient
+                    let t = (p.sdf + 1.0) / 2.0;
+                    if t < 0.5 {
+                        let f = t * 2.0; // 0 to 1
+                        r = 0;
+                        g = (f * 255.0) as u8;
+                        b = ((1.0 - f) * 255.0) as u8;
+                    } else {
+                        let f = (t - 0.5) * 2.0; // 0 to 1
+                        r = (f * 255.0) as u8;
+                        g = ((1.0 - f) * 255.0) as u8;
+                        b = 0;
+                    }
+                }
+                writeln!(writer, "{} {} {} {} {} {}", p.x, p.y, p.z, r, g, b)?;
             }
         }
         Some("vtk") => {
