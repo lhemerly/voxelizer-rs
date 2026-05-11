@@ -2,6 +2,7 @@ use anyhow::Result;
 use nalgebra::Point3;
 use parry3d::math::{Isometry, Point, Vector};
 use parry3d::query::{PointQuery, Ray, RayCast, intersection_test};
+use indicatif::{ParallelProgressIterator, ProgressBar, ProgressStyle};
 use parry3d::shape::{Cuboid, TriMesh};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -252,6 +253,8 @@ impl MeshProcessor {
         surface_only: bool,
         narrow_band: Option<f64>,
         phase_sphere: Option<[f64; 4]>,
+        hollow: Option<f64>,
+        infill_gyroid: Option<f64>,
     ) -> Result<Vec<ParticleData>> {
         if !resolution.is_finite() || resolution <= 1e-6 {
             anyhow::bail!(
@@ -296,10 +299,19 @@ impl MeshProcessor {
             nx * ny * nz
         );
 
+        let pb = ProgressBar::new(ny);
+        pb.set_style(
+            ProgressStyle::default_bar()
+                .template("[{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({eta})")
+                .unwrap()
+                .progress_chars("=>-"),
+        );
+
         // We avoid collecting the entire yz cartesian product to save memory.
         // Instead we can use rayon's `into_par_iter` on a range or use flat_map across the ranges.
         let particles: Vec<ParticleData> = (0..ny)
             .into_par_iter()
+            .progress_with(pb.clone())
             .flat_map(|iy| {
                 (0..nz).into_par_iter().flat_map(move |iz| {
                     let mut local_particles = Vec::with_capacity(nx as usize);
@@ -402,23 +414,63 @@ impl MeshProcessor {
                                 self.mesh.distance_to_local_point(&point_3d, false) as f32;
                             let sdf = if is_inside { -distance } else { distance };
 
-                            let keep = if let Some(band) = narrow_band {
+                            let mut keep = if let Some(band) = narrow_band {
                                 sdf.abs() <= band as f32
                             } else {
                                 sdf <= 0.0
                             };
 
-                            if keep {
-                                let mut phase = 0;
-                                if let Some(sphere) = phase_sphere {
-                                    let dx = x - sphere[0];
-                                    let dy = y - sphere[1];
-                                    let dz = z - sphere[2];
-                                    let r2 = sphere[3] * sphere[3];
-                                    if dx * dx + dy * dy + dz * dz <= r2 {
-                                        phase = 1;
+                            #[allow(clippy::collapsible_if)]
+                            if let Some(thickness) = hollow {
+                                if sdf < -thickness as f32 {
+                                    keep = false;
+                                }
+                            }
+
+                            let mut phase = 0;
+                            if let Some(sphere) = phase_sphere {
+                                let dx = x - sphere[0];
+                                let dy = y - sphere[1];
+                                let dz = z - sphere[2];
+                                let r2 = sphere[3] * sphere[3];
+                                if dx * dx + dy * dy + dz * dz <= r2 {
+                                    phase = 1;
+                                }
+                            }
+
+                            #[allow(clippy::collapsible_if)]
+                            if let Some(scale) = infill_gyroid {
+                                if sdf < 0.0 {
+                                    // If we are strictly in the interior (hollowed region)
+                                    let is_in_hollowed_region = hollow.is_some() && sdf < -hollow.unwrap() as f32;
+
+                                    // If we are inside the object but NOT using hollow, we want to remove non-gyroid voxels too
+                                    let mut should_evaluate_gyroid = true;
+
+                                    // If hollowing is active, only gyroid the hollowed region
+                                    if hollow.is_some() && !is_in_hollowed_region {
+                                        should_evaluate_gyroid = false;
+                                    }
+
+                                    if should_evaluate_gyroid {
+                                        let sx = x * scale;
+                                        let sy = y * scale;
+                                        let sz = z * scale;
+                                        let gyroid = sx.sin() * sy.cos()
+                                            + sy.sin() * sz.cos()
+                                            + sz.sin() * sx.cos();
+                                        if gyroid.abs() < 0.2 {
+                                            phase = 2;
+                                            keep = true; // Add it back if it was hollowed, or keep it
+                                        } else {
+                                            // Not on gyroid line, so remove it (this creates the empty space for the infill structure)
+                                            keep = false;
+                                        }
                                     }
                                 }
+                            }
+
+                            if keep {
                                 local_particles.push(ParticleData {
                                     x: x as f32,
                                     y: y as f32,
@@ -436,6 +488,8 @@ impl MeshProcessor {
                 })
             })
             .collect();
+
+        pb.finish_with_message("Done");
 
         let duration = start_time.elapsed();
         println!("Voxelization complete in {:.2?}s", duration);
@@ -466,7 +520,7 @@ mod tests {
         };
 
         let check_err = |res: f64| {
-            let err = processor.voxelize(res, false, None, None).unwrap_err();
+            let err = processor.voxelize(res, false, None, None, None, None).unwrap_err();
             assert_eq!(
                 err.to_string(),
                 format!(
@@ -482,7 +536,7 @@ mod tests {
         check_err(f64::NAN);
         check_err(f64::INFINITY);
 
-        assert!(processor.voxelize(0.5, false, None, None).is_ok());
+        assert!(processor.voxelize(0.5, false, None, None, None, None).is_ok());
     }
 
     #[test]
@@ -504,7 +558,7 @@ mod tests {
 
         let assert_narrow_band_error = |band: f64| {
             let err = processor
-                .voxelize(0.5, false, Some(band), None)
+                .voxelize(0.5, false, Some(band), None, None, None)
                 .unwrap_err();
             assert_eq!(
                 err.to_string(),
@@ -520,8 +574,8 @@ mod tests {
         assert_narrow_band_error(f64::INFINITY);
         assert_narrow_band_error(f64::NEG_INFINITY);
 
-        assert!(processor.voxelize(0.5, false, Some(0.0), None).is_ok());
-        assert!(processor.voxelize(0.5, false, Some(2.0), None).is_ok());
+        assert!(processor.voxelize(0.5, false, Some(0.0), None, None, None).is_ok());
+        assert!(processor.voxelize(0.5, false, Some(2.0), None, None, None).is_ok());
     }
 
     #[test]
@@ -563,7 +617,7 @@ mod tests {
             bounds_max,
         };
 
-        let particles = processor.voxelize(0.5, false, None, None).unwrap();
+        let particles = processor.voxelize(0.5, false, None, None, None, None).unwrap();
         assert_eq!(
             particles.len(),
             8,
