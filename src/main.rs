@@ -45,6 +45,15 @@ struct Args {
 
     #[arg(long)]
     threads: Option<usize>,
+
+    #[arg(long)]
+    hollow: Option<f64>,
+
+    #[arg(long)]
+    infill_gyroid: Option<f64>,
+
+    #[arg(long)]
+    color_sdf: bool,
 }
 
 fn parse_vec4(s: &str) -> Result<[f64; 4], String> {
@@ -163,6 +172,8 @@ fn main() -> anyhow::Result<()> {
         args.surface_only,
         args.narrow_band,
         args.phase_sphere,
+        args.hollow,
+        args.infill_gyroid,
     )?;
 
     println!("Generated {} particles.", particles.len());
@@ -190,9 +201,28 @@ fn main() -> anyhow::Result<()> {
             writeln!(writer, "property float x")?;
             writeln!(writer, "property float y")?;
             writeln!(writer, "property float z")?;
+            if args.color_sdf {
+                writeln!(writer, "property uchar red")?;
+                writeln!(writer, "property uchar green")?;
+                writeln!(writer, "property uchar blue")?;
+            }
             writeln!(writer, "end_header")?;
             for p in &particles {
-                writeln!(writer, "{} {} {}", p.x, p.y, p.z)?;
+                if args.color_sdf {
+                    let mut r = 0;
+                    let mut g = 0;
+                    let mut b = 0;
+                    if p.sdf < -1e-4 {
+                        b = 255;
+                    } else if p.sdf > 1e-4 {
+                        r = 255;
+                    } else {
+                        g = 255;
+                    }
+                    writeln!(writer, "{} {} {} {} {} {}", p.x, p.y, p.z, r, g, b)?;
+                } else {
+                    writeln!(writer, "{} {} {}", p.x, p.y, p.z)?;
+                }
             }
         }
         Some("vtk") => {
