@@ -178,9 +178,9 @@ fn main() -> anyhow::Result<()> {
 
     match extension.as_deref() {
         Some("csv") => {
-            writeln!(writer, "x,y,z,phase")?;
+            writeln!(writer, "x,y,z,sdf,phase")?;
             for p in &particles {
-                writeln!(writer, "{},{},{},{}", p.x, p.y, p.z, p.phase)?;
+                writeln!(writer, "{},{},{},{},{}", p.x, p.y, p.z, p.sdf, p.phase)?;
             }
         }
         Some("ply") => {
@@ -190,9 +190,20 @@ fn main() -> anyhow::Result<()> {
             writeln!(writer, "property float x")?;
             writeln!(writer, "property float y")?;
             writeln!(writer, "property float z")?;
+            writeln!(writer, "property float sdf")?;
+            writeln!(writer, "property uchar red")?;
+            writeln!(writer, "property uchar green")?;
+            writeln!(writer, "property uchar blue")?;
             writeln!(writer, "end_header")?;
             for p in &particles {
-                writeln!(writer, "{} {} {}", p.x, p.y, p.z)?;
+                let (r, g, b) = if p.sdf < -1e-4 {
+                    (0, 0, 255) // Inside -> Blue
+                } else if p.sdf > 1e-4 {
+                    (255, 0, 0) // Outside -> Red
+                } else {
+                    (0, 255, 0) // Surface -> Green
+                };
+                writeln!(writer, "{} {} {} {} {} {} {}", p.x, p.y, p.z, p.sdf, r, g, b)?;
             }
         }
         Some("vtk") => {
@@ -209,6 +220,11 @@ fn main() -> anyhow::Result<()> {
             writeln!(writer, "LOOKUP_TABLE default")?;
             for p in &particles {
                 writeln!(writer, "{}", p.phase)?;
+            }
+            writeln!(writer, "SCALARS sdf float 1")?;
+            writeln!(writer, "LOOKUP_TABLE default")?;
+            for p in &particles {
+                writeln!(writer, "{}", p.sdf)?;
             }
         }
         Some("vox") => {
@@ -323,4 +339,30 @@ fn main() -> anyhow::Result<()> {
 
     println!("Saved to {}", args.output);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_vec3() {
+        assert_eq!(parse_vec3("1.0,2.5,-3.0").unwrap(), [1.0, 2.5, -3.0]);
+        assert!(parse_vec3("1.0,2.0").is_err());
+        assert!(parse_vec3("a,b,c").is_err());
+    }
+
+    #[test]
+    fn test_parse_vec4() {
+        assert_eq!(parse_vec4("1.0,2.5,-3.0,4.2").unwrap(), [1.0, 2.5, -3.0, 4.2]);
+        assert!(parse_vec4("1.0,2.0,3.0").is_err());
+        assert!(parse_vec4("a,b,c,d").is_err());
+    }
+
+    #[test]
+    fn test_parse_vec6() {
+        assert_eq!(parse_vec6("1.0,2.0,3.0,4.0,5.0,6.0").unwrap(), [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+        assert!(parse_vec6("1.0,2.0,3.0,4.0,5.0").is_err());
+        assert!(parse_vec6("a,b,c,d,e,f").is_err());
+    }
 }
