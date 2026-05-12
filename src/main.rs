@@ -45,6 +45,15 @@ struct Args {
 
     #[arg(long)]
     threads: Option<usize>,
+
+    #[arg(long)]
+    color_map: Option<String>,
+
+    #[arg(long)]
+    ascii: bool,
+
+    #[arg(long)]
+    infill: Option<String>,
 }
 
 fn parse_vec4(s: &str) -> Result<[f64; 4], String> {
@@ -158,14 +167,57 @@ fn main() -> anyhow::Result<()> {
     };
 
     let processor = MeshProcessor::from_file(&args.input, &transform)?;
-    let particles = processor.voxelize(
+    let mut particles = processor.voxelize(
         args.resolution,
         args.surface_only,
         args.narrow_band,
         args.phase_sphere,
     )?;
 
+    if let Some(infill) = &args.infill {
+        #[allow(clippy::collapsible_if)]
+        if infill == "gyroid" {
+            particles.retain(|p| {
+                if p.sdf > -2.0 { return true; } // Keep solid shell
+                let s = 1.0; // scale
+                let (x, y, z) = (p.x * s, p.y * s, p.z * s);
+                (x.sin() * y.cos() + y.sin() * z.cos() + z.sin() * x.cos()) > 0.0
+            });
+        }
+    }
+
     println!("Generated {} particles.", particles.len());
+
+    if args.ascii && !particles.is_empty() {
+        println!("--- ASCII Preview ---");
+        let min_x = particles.iter().map(|p| p.x).fold(f32::INFINITY, f32::min);
+        let max_x = particles.iter().map(|p| p.x).fold(f32::NEG_INFINITY, f32::max);
+        let min_y = particles.iter().map(|p| p.y).fold(f32::INFINITY, f32::min);
+        let max_y = particles.iter().map(|p| p.y).fold(f32::NEG_INFINITY, f32::max);
+
+        let width = 80;
+        let height = 40;
+
+        let scale_x = width as f32 / (max_x - min_x).max(1e-5);
+        let scale_y = height as f32 / (max_y - min_y).max(1e-5);
+
+        let mut grid = vec![vec![' '; width]; height];
+        for p in &particles {
+            if p.sdf <= 0.0 {
+                let px = ((p.x - min_x) * scale_x) as usize;
+                let py = ((p.y - min_y) * scale_y) as usize;
+                if px < width && py < height {
+                    grid[py][px] = '█';
+                }
+            }
+        }
+
+        for row in grid {
+            let s: String = row.into_iter().collect();
+            println!("{}", s);
+        }
+        println!("---------------------");
+    }
 
     let path_out = Path::new(&args.output);
     let extension = path_out
@@ -190,9 +242,24 @@ fn main() -> anyhow::Result<()> {
             writeln!(writer, "property float x")?;
             writeln!(writer, "property float y")?;
             writeln!(writer, "property float z")?;
+            if args.color_map.is_some() {
+                writeln!(writer, "property uchar red")?;
+                writeln!(writer, "property uchar green")?;
+                writeln!(writer, "property uchar blue")?;
+            }
             writeln!(writer, "end_header")?;
             for p in &particles {
-                writeln!(writer, "{} {} {}", p.x, p.y, p.z)?;
+                if let Some(cmap) = &args.color_map {
+                    let (r, g, b) = if cmap == "depth" {
+                        let d = (-p.sdf * 10.0).clamp(0.0, 255.0) as u8;
+                        (d, 0, 255 - d)
+                    } else {
+                        (255, 255, 255)
+                    };
+                    writeln!(writer, "{} {} {} {} {} {}", p.x, p.y, p.z, r, g, b)?;
+                } else {
+                    writeln!(writer, "{} {} {}", p.x, p.y, p.z)?;
+                }
             }
         }
         Some("vtk") => {
