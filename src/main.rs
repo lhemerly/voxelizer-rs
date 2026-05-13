@@ -45,6 +45,18 @@ struct Args {
 
     #[arg(long)]
     threads: Option<usize>,
+
+    #[arg(long)]
+    twist: Option<f64>,
+
+    #[arg(long)]
+    taper: Option<f64>,
+
+    #[arg(long)]
+    gyroid: Option<f64>,
+
+    #[arg(long)]
+    preview: bool,
 }
 
 fn parse_vec4(s: &str) -> Result<[f64; 4], String> {
@@ -155,6 +167,8 @@ fn main() -> anyhow::Result<()> {
         rotate: args.rotate,
         crop: args.crop,
         vertex_noise: args.vertex_noise,
+        twist: args.twist,
+        taper: args.taper,
     };
 
     let processor = MeshProcessor::from_file(&args.input, &transform)?;
@@ -163,9 +177,14 @@ fn main() -> anyhow::Result<()> {
         args.surface_only,
         args.narrow_band,
         args.phase_sphere,
+        args.gyroid,
     )?;
 
     println!("Generated {} particles.", particles.len());
+
+    if args.preview {
+        print_ascii_preview(&particles);
+    }
 
     let path_out = Path::new(&args.output);
     let extension = path_out
@@ -323,4 +342,36 @@ fn main() -> anyhow::Result<()> {
 
     println!("Saved to {}", args.output);
     Ok(())
+}
+
+fn print_ascii_preview(particles: &[voxelizer_rs::ParticleData]) {
+    if particles.is_empty() { return; }
+    let mut min_x = f32::MAX;
+    let mut max_x = f32::MIN;
+    let mut min_z = f32::MAX;
+    let mut max_z = f32::MIN;
+    for p in particles {
+        if p.x < min_x { min_x = p.x; }
+        if p.x > max_x { max_x = p.x; }
+        if p.z < min_z { min_z = p.z; }
+        if p.z > max_z { max_z = p.z; }
+    }
+    let width = 60;
+    let height = 30;
+    let mut grid = vec![vec![0; width]; height];
+    for p in particles {
+        let ix = if max_x > min_x { ((p.x - min_x) / (max_x - min_x) * (width as f32 - 1.0)) as usize } else { 0 };
+        let iz = if max_z > min_z { ((p.z - min_z) / (max_z - min_z) * (height as f32 - 1.0)) as usize } else { 0 };
+        grid[iz][ix] += 1;
+    }
+    let chars = [' ', '.', ':', '-', '=', '+', '*', '#', '%', '@'];
+    println!("ASCII Preview (Front View):");
+    for z in (0..height).rev() {
+        #[allow(clippy::needless_range_loop)] for x in 0..width {
+            let count = grid[z][x];
+            let c = if count == 0 { ' ' } else { chars[count.min(chars.len() - 1)] };
+            print!("{}", c);
+        }
+        println!();
+    }
 }
