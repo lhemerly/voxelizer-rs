@@ -260,11 +260,14 @@ impl MeshProcessor {
             );
         }
 
-        if narrow_band.is_some_and(|band| !band.is_finite() || band < 0.0) {
-            anyhow::bail!(
-                "Narrow band must be a finite non-negative number. Provided: {}",
-                narrow_band.unwrap()
-            );
+        #[allow(clippy::collapsible_if)]
+        if let Some(band) = narrow_band {
+            if !band.is_finite() || band < 0.0 {
+                anyhow::bail!(
+                    "Narrow band must be a finite non-negative number. Provided: {}",
+                    band
+                );
+            }
         }
 
         let start_time = std::time::Instant::now();
