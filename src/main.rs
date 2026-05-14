@@ -47,70 +47,30 @@ struct Args {
     threads: Option<usize>,
 }
 
-fn parse_vec4(s: &str) -> Result<[f64; 4], String> {
+fn parse_vec<const N: usize>(s: &str, expected_format: &str) -> Result<[f64; N], String> {
     let parts: Vec<&str> = s.split(',').collect();
-    if parts.len() != 4 {
-        return Err(format!("Expected 'x,y,z,radius', got '{}'", s));
+    if parts.len() != N {
+        return Err(format!("Expected '{}', got '{}'", expected_format, s));
     }
-    let x = parts[0]
-        .parse()
-        .map_err(|_| format!("Invalid x: {}", parts[0]))?;
-    let y = parts[1]
-        .parse()
-        .map_err(|_| format!("Invalid y: {}", parts[1]))?;
-    let z = parts[2]
-        .parse()
-        .map_err(|_| format!("Invalid z: {}", parts[2]))?;
-    let w = parts[3]
-        .parse()
-        .map_err(|_| format!("Invalid radius: {}", parts[3]))?;
-    Ok([x, y, z, w])
+    let mut arr = [0.0; N];
+    for (i, part) in parts.iter().enumerate() {
+        arr[i] = part
+            .parse()
+            .map_err(|_| format!("Invalid value: {}", part))?;
+    }
+    Ok(arr)
+}
+
+fn parse_vec4(s: &str) -> Result<[f64; 4], String> {
+    parse_vec(s, "x,y,z,radius")
 }
 
 fn parse_vec6(s: &str) -> Result<[f64; 6], String> {
-    let parts: Vec<&str> = s.split(',').collect();
-    if parts.len() != 6 {
-        return Err(format!(
-            "Expected 'min_x,min_y,min_z,max_x,max_y,max_z', got '{}'",
-            s
-        ));
-    }
-    let v0 = parts[0]
-        .parse()
-        .map_err(|_| format!("Invalid value: {}", parts[0]))?;
-    let v1 = parts[1]
-        .parse()
-        .map_err(|_| format!("Invalid value: {}", parts[1]))?;
-    let v2 = parts[2]
-        .parse()
-        .map_err(|_| format!("Invalid value: {}", parts[2]))?;
-    let v3 = parts[3]
-        .parse()
-        .map_err(|_| format!("Invalid value: {}", parts[3]))?;
-    let v4 = parts[4]
-        .parse()
-        .map_err(|_| format!("Invalid value: {}", parts[4]))?;
-    let v5 = parts[5]
-        .parse()
-        .map_err(|_| format!("Invalid value: {}", parts[5]))?;
-    Ok([v0, v1, v2, v3, v4, v5])
+    parse_vec(s, "min_x,min_y,min_z,max_x,max_y,max_z")
 }
 
 fn parse_vec3(s: &str) -> Result<[f64; 3], String> {
-    let parts: Vec<&str> = s.split(',').collect();
-    if parts.len() != 3 {
-        return Err(format!("Expected 'x,y,z', got '{}'", s));
-    }
-    let x = parts[0]
-        .parse()
-        .map_err(|_| format!("Invalid x: {}", parts[0]))?;
-    let y = parts[1]
-        .parse()
-        .map_err(|_| format!("Invalid y: {}", parts[1]))?;
-    let z = parts[2]
-        .parse()
-        .map_err(|_| format!("Invalid z: {}", parts[2]))?;
-    Ok([x, y, z])
+    parse_vec(s, "x,y,z")
 }
 
 fn validate_resolution(s: &str) -> Result<f64, String> {
