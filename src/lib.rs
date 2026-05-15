@@ -298,20 +298,37 @@ impl MeshProcessor {
 
         // We avoid collecting the entire yz cartesian product to save memory.
         // Instead we can use rayon's `into_par_iter` on a range or use flat_map across the ranges.
+        let start_x = self.bounds_min.x - 1.0;
+        let max_dist = (bounds_max.x.max(self.bounds_max.x) - start_x) + 1.0;
+        let base_x = bounds_min.x + (resolution * 0.5);
+        let base_y = bounds_min.y + (resolution * 0.5);
+        let base_z = bounds_min.z + (resolution * 0.5);
+
+        let phase_sphere_opt = phase_sphere.map(|s| (s[0], s[1], s[2], s[3] * s[3]));
+
         let particles: Vec<ParticleData> = (0..ny)
             .into_par_iter()
             .flat_map(|iy| {
+                let y = base_y + (iy as f64 * resolution);
+                let dy_sq = phase_sphere_opt.map(|s| {
+                    let dy = y - s.1;
+                    dy * dy
+                });
+
                 (0..nz).into_par_iter().flat_map(move |iz| {
                     let mut local_particles = Vec::with_capacity(nx as usize);
-                    let y = bounds_min.y + (iy as f64 * resolution) + (resolution * 0.5);
-                    let z = bounds_min.z + (iz as f64 * resolution) + (resolution * 0.5);
+                    let z = base_z + (iz as f64 * resolution);
+
+                    let phase_sphere_z_opt = phase_sphere_opt.map(|s| {
+                        let dz = z - s.2;
+                        let dy2 = dy_sq.unwrap();
+                        (s.0, dy2 + dz * dz, s.3)
+                    });
 
                     // Extract raycasting to be available for both modes so SDF sign is consistent.
-                    let start_x = self.bounds_min.x - 1.0;
                     let ray_point = Point::new(start_x, y, z);
                     let ray = Ray::new(ray_point, Vector::x());
                     let mut current_ray = ray;
-                    let max_dist = (bounds_max.x.max(self.bounds_max.x) - start_x) + 1.0;
 
                     let mut hit_xs = Vec::new();
                     while let Some(hit_toi) = self.mesh.cast_local_ray(&current_ray, max_dist, true)
@@ -339,7 +356,7 @@ impl MeshProcessor {
                         let mesh_iso = Isometry::identity();
 
                         for ix in 0..nx {
-                            let x = bounds_min.x + (ix as f64 * resolution) + (resolution * 0.5);
+                            let x = base_x + (ix as f64 * resolution);
                             let point = Point::new(x, y, z);
                             let voxel_iso = Isometry::translation(point.x, point.y, point.z);
 
@@ -388,7 +405,7 @@ impl MeshProcessor {
                         }
                     } else {
                         for ix in 0..nx {
-                            let x = bounds_min.x + (ix as f64 * resolution) + (resolution * 0.5);
+                            let x = base_x + (ix as f64 * resolution);
                             let point_3d = Point::new(x, y, z);
 
                             // A point is inside if it has an odd number of intersections to its right (or left).
@@ -410,12 +427,9 @@ impl MeshProcessor {
 
                             if keep {
                                 let mut phase = 0;
-                                if let Some(sphere) = phase_sphere {
-                                    let dx = x - sphere[0];
-                                    let dy = y - sphere[1];
-                                    let dz = z - sphere[2];
-                                    let r2 = sphere[3] * sphere[3];
-                                    if dx * dx + dy * dy + dz * dz <= r2 {
+                                if let Some((sx, dy2_dz2, r2)) = phase_sphere_z_opt {
+                                    let dx = x - sx;
+                                    if dx * dx + dy2_dz2 <= r2 {
                                         phase = 1;
                                     }
                                 }
