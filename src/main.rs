@@ -308,6 +308,11 @@ fn main() -> anyhow::Result<()> {
                 writeln!(writer, "v {} {} {}", p.x, p.y, p.z)?;
             }
         }
+        Some("xyz") => {
+            for p in &particles {
+                writeln!(writer, "{} {} {}", p.x, p.y, p.z)?;
+            }
+        }
         _ => {
             // Default to BIN
             let header = ParticleHeader {
@@ -323,4 +328,30 @@ fn main() -> anyhow::Result<()> {
 
     println!("Saved to {}", args.output);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_vec3() {
+        assert_eq!(parse_vec3("1.0,2.0,3.0").unwrap(), [1.0, 2.0, 3.0]);
+        assert!(parse_vec3("1.0,2.0").is_err());
+    }
+
+    #[test]
+    fn test_parse_vec4() {
+        assert_eq!(parse_vec4("1.0,2.0,3.0,4.0").unwrap(), [1.0, 2.0, 3.0, 4.0]);
+        assert!(parse_vec4("1.0,2.0,3.0").is_err());
+    }
+
+    #[test]
+    fn test_parse_vec6() {
+        assert_eq!(
+            parse_vec6("1.0,2.0,3.0,4.0,5.0,6.0").unwrap(),
+            [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
+        );
+        assert!(parse_vec6("1.0,2.0,3.0,4.0,5.0").is_err());
+    }
 }
