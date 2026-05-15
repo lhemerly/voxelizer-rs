@@ -190,7 +190,18 @@ fn main() -> anyhow::Result<()> {
             writeln!(writer, "property float x")?;
             writeln!(writer, "property float y")?;
             writeln!(writer, "property float z")?;
+            writeln!(writer, "property uchar red")?;
+            writeln!(writer, "property uchar green")?;
+            writeln!(writer, "property uchar blue")?;
             writeln!(writer, "end_header")?;
+            for p in &particles {
+                let r = if p.sdf > 0.0 { 255 } else { 0 };
+                let g = if p.sdf == 0.0 { 255 } else { 0 };
+                let b = if p.sdf < 0.0 { 255 } else { 0 };
+                writeln!(writer, "{} {} {} {} {} {}", p.x, p.y, p.z, r, g, b)?;
+            }
+        }
+        Some("xyz") => {
             for p in &particles {
                 writeln!(writer, "{} {} {}", p.x, p.y, p.z)?;
             }
