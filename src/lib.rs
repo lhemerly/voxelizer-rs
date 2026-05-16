@@ -260,11 +260,13 @@ impl MeshProcessor {
             );
         }
 
-        if narrow_band.is_some_and(|band| !band.is_finite() || band < 0.0) {
-            anyhow::bail!(
-                "Narrow band must be a finite non-negative number. Provided: {}",
-                narrow_band.unwrap()
-            );
+        if let Some(band) = narrow_band {
+            if !band.is_finite() || band < 0.0 {
+                anyhow::bail!(
+                    "Narrow band must be a finite non-negative number. Provided: {}",
+                    band
+                );
+            }
         }
 
         let start_time = std::time::Instant::now();
@@ -305,6 +307,14 @@ impl MeshProcessor {
                     let mut local_particles = Vec::with_capacity(nx as usize);
                     let y = bounds_min.y + (iy as f64 * resolution) + (resolution * 0.5);
                     let z = bounds_min.z + (iz as f64 * resolution) + (resolution * 0.5);
+
+                    // Pre-calculate phase_sphere values invariant to ix
+                    let phase_sphere_data = phase_sphere.map(|sphere| {
+                        let dy = y - sphere[1];
+                        let dz = z - sphere[2];
+                        let r2 = sphere[3] * sphere[3];
+                        (sphere[0], dy * dy + dz * dz, r2)
+                    });
 
                     // Extract raycasting to be available for both modes so SDF sign is consistent.
                     let start_x = self.bounds_min.x - 1.0;
@@ -364,12 +374,9 @@ impl MeshProcessor {
 
                                 if keep {
                                     let mut phase = 0;
-                                    if let Some(sphere) = phase_sphere {
-                                        let dx = x - sphere[0];
-                                        let dy = y - sphere[1];
-                                        let dz = z - sphere[2];
-                                        let r2 = sphere[3] * sphere[3];
-                                        if dx * dx + dy * dy + dz * dz <= r2 {
+                                    if let Some((sx, dy_dz_sq, r2)) = phase_sphere_data {
+                                        let dx = x - sx;
+                                        if dx * dx + dy_dz_sq <= r2 {
                                             phase = 1;
                                         }
                                     }
@@ -398,24 +405,26 @@ impl MeshProcessor {
 
                             let is_inside = intersections_to_right % 2 != 0;
 
-                            let distance =
-                                self.mesh.distance_to_local_point(&point_3d, false) as f32;
-                            let sdf = if is_inside { -distance } else { distance };
+                            let sdf = if is_inside || narrow_band.is_some() {
+                                let distance =
+                                    self.mesh.distance_to_local_point(&point_3d, false) as f32;
+                                if is_inside { -distance } else { distance }
+                            } else {
+                                // If solid filling and not inside, we don't care about distance. Just set an outside dummy value.
+                                0.0
+                            };
 
                             let keep = if let Some(band) = narrow_band {
                                 sdf.abs() <= band as f32
                             } else {
-                                sdf <= 0.0
+                                is_inside // Since sdf is bypassed, we can just use `is_inside` here
                             };
 
                             if keep {
                                 let mut phase = 0;
-                                if let Some(sphere) = phase_sphere {
-                                    let dx = x - sphere[0];
-                                    let dy = y - sphere[1];
-                                    let dz = z - sphere[2];
-                                    let r2 = sphere[3] * sphere[3];
-                                    if dx * dx + dy * dy + dz * dz <= r2 {
+                                if let Some((sx, dy_dz_sq, r2)) = phase_sphere_data {
+                                    let dx = x - sx;
+                                    if dx * dx + dy_dz_sq <= r2 {
                                         phase = 1;
                                     }
                                 }
@@ -522,6 +531,55 @@ mod tests {
 
         assert!(processor.voxelize(0.5, false, Some(0.0), None).is_ok());
         assert!(processor.voxelize(0.5, false, Some(2.0), None).is_ok());
+    }
+
+    #[test]
+    fn test_voxelize_phase_sphere() {
+        let points = vec![
+            Point::new(0.0, 0.0, 0.0),
+            Point::new(1.0, 0.0, 0.0),
+            Point::new(1.0, 1.0, 0.0),
+            Point::new(0.0, 1.0, 0.0),
+            Point::new(0.0, 0.0, 1.0),
+            Point::new(1.0, 0.0, 1.0),
+            Point::new(1.0, 1.0, 1.0),
+            Point::new(0.0, 1.0, 1.0),
+        ];
+
+        let indices = vec![
+            [0, 1, 2], [0, 2, 3], [5, 4, 7], [5, 7, 6],
+            [4, 5, 1], [4, 1, 0], [3, 2, 6], [3, 6, 7],
+            [4, 0, 3], [4, 3, 7], [1, 5, 6], [1, 6, 2],
+        ];
+
+        let mesh = TriMesh::new(points, indices);
+        let bounds_min = mesh.local_aabb().mins;
+        let bounds_max = mesh.local_aabb().maxs;
+        let processor = MeshProcessor {
+            mesh,
+            bounds_min,
+            bounds_max,
+        };
+
+        // Center sphere at (0, 0, 0) with radius 0.5.
+        // The cube will have voxels at centers (0.25, 0.25, 0.25), etc.
+        // Only the voxel at (0.25, 0.25, 0.25) should fall within the sphere.
+        // Distance squared = 0.25^2 * 3 = 0.1875 <= 0.25 (0.5^2)
+        let particles = processor.voxelize(0.5, false, None, Some([0.0, 0.0, 0.0, 0.5])).unwrap();
+        assert_eq!(particles.len(), 8);
+
+        let mut phase_1_count = 0;
+        for p in &particles {
+            if p.phase == 1 {
+                phase_1_count += 1;
+                assert_eq!(p.x, 0.25);
+                assert_eq!(p.y, 0.25);
+                assert_eq!(p.z, 0.25);
+            } else {
+                assert_eq!(p.phase, 0);
+            }
+        }
+        assert_eq!(phase_1_count, 1, "Exactly one voxel should have phase 1");
     }
 
     #[test]
