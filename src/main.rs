@@ -177,6 +177,11 @@ fn main() -> anyhow::Result<()> {
     let mut writer = BufWriter::new(file);
 
     match extension.as_deref() {
+        Some("xyz") => {
+            for p in &particles {
+                writeln!(writer, "{} {} {}", p.x, p.y, p.z)?;
+            }
+        }
         Some("csv") => {
             writeln!(writer, "x,y,z,phase")?;
             for p in &particles {
@@ -190,9 +195,22 @@ fn main() -> anyhow::Result<()> {
             writeln!(writer, "property float x")?;
             writeln!(writer, "property float y")?;
             writeln!(writer, "property float z")?;
+            writeln!(writer, "property uchar red")?;
+            writeln!(writer, "property uchar green")?;
+            writeln!(writer, "property uchar blue")?;
             writeln!(writer, "end_header")?;
             for p in &particles {
-                writeln!(writer, "{} {} {}", p.x, p.y, p.z)?;
+                let (r, g, b) = if p.sdf < -1e-5 {
+                    // Inside: Blue
+                    (0, 0, 255)
+                } else if p.sdf > 1e-5 {
+                    // Outside: Red
+                    (255, 0, 0)
+                } else {
+                    // Surface: Green
+                    (0, 255, 0)
+                };
+                writeln!(writer, "{} {} {} {} {} {}", p.x, p.y, p.z, r, g, b)?;
             }
         }
         Some("vtk") => {
