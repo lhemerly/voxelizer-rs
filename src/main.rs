@@ -308,6 +308,11 @@ fn main() -> anyhow::Result<()> {
                 writeln!(writer, "v {} {} {}", p.x, p.y, p.z)?;
             }
         }
+        Some("xyz") => {
+            for p in &particles {
+                writeln!(writer, "{} {} {}", p.x, p.y, p.z)?;
+            }
+        }
         _ => {
             // Default to BIN
             let header = ParticleHeader {
