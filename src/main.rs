@@ -308,6 +308,11 @@ fn main() -> anyhow::Result<()> {
                 writeln!(writer, "v {} {} {}", p.x, p.y, p.z)?;
             }
         }
+        Some("xyz") => {
+            for p in &particles {
+                writeln!(writer, "{} {} {}", p.x, p.y, p.z)?;
+            }
+        }
         _ => {
             // Default to BIN
             let header = ParticleHeader {
@@ -323,4 +328,89 @@ fn main() -> anyhow::Result<()> {
 
     println!("Saved to {}", args.output);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use assert_cmd::Command;
+    use std::fs;
+
+    #[test]
+    fn test_xyz_export() {
+        let temp_dir = std::env::temp_dir();
+        // ensure unique name
+        let input_path = temp_dir.join(format!("test_cube_{}.stl", std::time::UNIX_EPOCH.elapsed().unwrap().as_nanos()));
+        let output_path = temp_dir.join(format!("output_{}.xyz", std::time::UNIX_EPOCH.elapsed().unwrap().as_nanos()));
+
+        // Create a simple cube STL. We need to define a closed volume or at least an adequate mesh
+        // so that the voxelizer produces particles. Since the original test logic was producing an empty output,
+        // let's create a closed cube mesh
+        let points = vec![
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [1.0, 1.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [1.0, 0.0, 1.0],
+            [1.0, 1.0, 1.0],
+            [0.0, 1.0, 1.0],
+        ];
+
+        let indices = vec![
+            [0, 1, 2], [0, 2, 3], // Front
+            [5, 4, 7], [5, 7, 6], // Back
+            [4, 5, 1], [4, 1, 0], // Bottom
+            [3, 2, 6], [3, 6, 7], // Top
+            [4, 0, 3], [4, 3, 7], // Left
+            [1, 5, 6], [1, 6, 2], // Right
+        ];
+
+        let mut faces = Vec::new();
+        for idx in indices {
+            faces.push([
+                points[idx[0]], points[idx[1]], points[idx[2]]
+            ]);
+        }
+
+        let mut f = std::fs::File::create(&input_path).unwrap();
+        use std::io::Write;
+        f.write_all(&[0; 80]).unwrap();
+        f.write_all(&(faces.len() as u32).to_le_bytes()).unwrap();
+        for v in &faces {
+            f.write_all(&[0; 12]).unwrap();
+            for c in v {
+                for comp in c {
+                    f.write_all(&(*comp as f32).to_le_bytes()).unwrap();
+                }
+            }
+            f.write_all(&[0; 2]).unwrap();
+        }
+
+        let mut cmd = Command::cargo_bin("voxelizer-rs").unwrap();
+        cmd.arg("--input")
+            .arg(input_path.to_str().unwrap())
+            .arg("--output")
+            .arg(output_path.to_str().unwrap())
+            .arg("--resolution")
+            .arg("0.5")
+            .assert()
+            .success();
+
+        let output_content = fs::read_to_string(&output_path).unwrap();
+
+        // Assert that the file is not empty
+        assert!(!output_content.is_empty(), "XYZ output should not be empty");
+
+        // Assert that the lines only contain x, y, z floats separated by space
+        for line in output_content.lines() {
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            assert_eq!(parts.len(), 3, "Each line should have exactly 3 coordinates");
+            assert!(parts[0].parse::<f32>().is_ok());
+            assert!(parts[1].parse::<f32>().is_ok());
+            assert!(parts[2].parse::<f32>().is_ok());
+        }
+
+        let _ = fs::remove_file(input_path);
+        let _ = fs::remove_file(output_path);
+    }
 }
