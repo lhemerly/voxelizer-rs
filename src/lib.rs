@@ -252,6 +252,8 @@ impl MeshProcessor {
         surface_only: bool,
         narrow_band: Option<f64>,
         phase_sphere: Option<[f64; 4]>,
+        infill: Option<(String, f64)>,
+        voxel_noise: Option<f64>,
     ) -> Result<Vec<ParticleData>> {
         if !resolution.is_finite() || resolution <= 1e-6 {
             anyhow::bail!(
@@ -301,6 +303,7 @@ impl MeshProcessor {
         let particles: Vec<ParticleData> = (0..ny)
             .into_par_iter()
             .flat_map(|iy| {
+                let infill_ref = &infill;
                 (0..nz).into_par_iter().flat_map(move |iz| {
                     let mut local_particles = Vec::with_capacity(nx as usize);
                     let y = bounds_min.y + (iy as f64 * resolution) + (resolution * 0.5);
@@ -356,11 +359,33 @@ impl MeshProcessor {
 
                                 // Surface voxels inherently intersect the surface, so they should always be kept
                                 // if we're not using narrow_band. If narrow_band is used, we check the distance.
-                                let keep = if let Some(band) = narrow_band {
+                                let mut keep = if let Some(band) = narrow_band {
                                     sdf.abs() <= band as f32
                                 } else {
                                     true
                                 };
+
+                                if keep {
+                                    if let Some((mode, scale)) = infill_ref {
+                                        if mode == "gyroid" {
+                                            let gx = x / scale;
+                                            let gy = y / scale;
+                                            let gz = z / scale;
+                                            let val = gx.sin() * gy.cos() + gy.sin() * gz.cos() + gz.sin() * gx.cos();
+                                            if val <= 0.0 {
+                                                keep = false;
+                                            }
+                                        } else if mode == "grid" {
+                                            let tx = (x / scale).rem_euclid(1.0);
+                                            let ty = (y / scale).rem_euclid(1.0);
+                                            let tz = (z / scale).rem_euclid(1.0);
+                                            let thickness = 0.5;
+                                            if tx > thickness && ty > thickness && tz > thickness {
+                                                keep = false;
+                                            }
+                                        }
+                                    }
+                                }
 
                                 if keep {
                                     let mut phase = 0;
@@ -373,10 +398,33 @@ impl MeshProcessor {
                                             phase = 1;
                                         }
                                     }
+
+                                    let mut px = x;
+                                    let mut py = y;
+                                    let mut pz = z;
+
+                                    if let Some(amp) = voxel_noise {
+                                        // Simple deterministic LCG based on spatial coordinates
+                                        let mut seed = ((ix as u64).wrapping_mul(73856093) ^
+                                                        (iy as u64).wrapping_mul(19349663) ^
+                                                        (iz as u64).wrapping_mul(83492791)) as u32;
+
+                                        seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+                                        let rx = (seed as f64 / u32::MAX as f64) * 2.0 - 1.0;
+                                        seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+                                        let ry = (seed as f64 / u32::MAX as f64) * 2.0 - 1.0;
+                                        seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+                                        let rz = (seed as f64 / u32::MAX as f64) * 2.0 - 1.0;
+
+                                        px += rx * amp;
+                                        py += ry * amp;
+                                        pz += rz * amp;
+                                    }
+
                                     local_particles.push(ParticleData {
-                                        x: x as f32,
-                                        y: y as f32,
-                                        z: z as f32,
+                                        x: px as f32,
+                                        y: py as f32,
+                                        z: pz as f32,
                                         sdf,
                                         phase,
                                         label_id: 0,
@@ -402,11 +450,33 @@ impl MeshProcessor {
                                 self.mesh.distance_to_local_point(&point_3d, false) as f32;
                             let sdf = if is_inside { -distance } else { distance };
 
-                            let keep = if let Some(band) = narrow_band {
+                            let mut keep = if let Some(band) = narrow_band {
                                 sdf.abs() <= band as f32
                             } else {
                                 sdf <= 0.0
                             };
+
+                            if keep {
+                                if let Some((mode, scale)) = infill_ref {
+                                    if mode == "gyroid" {
+                                        let gx = x / scale;
+                                        let gy = y / scale;
+                                        let gz = z / scale;
+                                        let val = gx.sin() * gy.cos() + gy.sin() * gz.cos() + gz.sin() * gx.cos();
+                                        if val <= 0.0 {
+                                            keep = false;
+                                        }
+                                    } else if mode == "grid" {
+                                        let tx = (x / scale).rem_euclid(1.0);
+                                        let ty = (y / scale).rem_euclid(1.0);
+                                        let tz = (z / scale).rem_euclid(1.0);
+                                        let thickness = 0.5;
+                                        if tx > thickness && ty > thickness && tz > thickness {
+                                            keep = false;
+                                        }
+                                    }
+                                }
+                            }
 
                             if keep {
                                 let mut phase = 0;
@@ -419,10 +489,33 @@ impl MeshProcessor {
                                         phase = 1;
                                     }
                                 }
+
+                                let mut px = x;
+                                let mut py = y;
+                                let mut pz = z;
+
+                                if let Some(amp) = voxel_noise {
+                                    // Simple deterministic LCG based on spatial coordinates
+                                    let mut seed = ((ix as u64).wrapping_mul(73856093) ^
+                                                    (iy as u64).wrapping_mul(19349663) ^
+                                                    (iz as u64).wrapping_mul(83492791)) as u32;
+
+                                    seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+                                    let rx = (seed as f64 / u32::MAX as f64) * 2.0 - 1.0;
+                                    seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+                                    let ry = (seed as f64 / u32::MAX as f64) * 2.0 - 1.0;
+                                    seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+                                    let rz = (seed as f64 / u32::MAX as f64) * 2.0 - 1.0;
+
+                                    px += rx * amp;
+                                    py += ry * amp;
+                                    pz += rz * amp;
+                                }
+
                                 local_particles.push(ParticleData {
-                                    x: x as f32,
-                                    y: y as f32,
-                                    z: z as f32,
+                                    x: px as f32,
+                                    y: py as f32,
+                                    z: pz as f32,
                                     sdf,
                                     phase,
                                     label_id: 0,
@@ -466,7 +559,7 @@ mod tests {
         };
 
         let check_err = |res: f64| {
-            let err = processor.voxelize(res, false, None, None).unwrap_err();
+            let err = processor.voxelize(res, false, None, None, None, None).unwrap_err();
             assert_eq!(
                 err.to_string(),
                 format!(
@@ -482,7 +575,7 @@ mod tests {
         check_err(f64::NAN);
         check_err(f64::INFINITY);
 
-        assert!(processor.voxelize(0.5, false, None, None).is_ok());
+        assert!(processor.voxelize(0.5, false, None, None, None, None).is_ok());
     }
 
     #[test]
@@ -504,7 +597,7 @@ mod tests {
 
         let assert_narrow_band_error = |band: f64| {
             let err = processor
-                .voxelize(0.5, false, Some(band), None)
+                .voxelize(0.5, false, Some(band), None, None, None)
                 .unwrap_err();
             assert_eq!(
                 err.to_string(),
@@ -520,8 +613,8 @@ mod tests {
         assert_narrow_band_error(f64::INFINITY);
         assert_narrow_band_error(f64::NEG_INFINITY);
 
-        assert!(processor.voxelize(0.5, false, Some(0.0), None).is_ok());
-        assert!(processor.voxelize(0.5, false, Some(2.0), None).is_ok());
+        assert!(processor.voxelize(0.5, false, Some(0.0), None, None, None).is_ok());
+        assert!(processor.voxelize(0.5, false, Some(2.0), None, None, None).is_ok());
     }
 
     #[test]
@@ -563,7 +656,7 @@ mod tests {
             bounds_max,
         };
 
-        let particles = processor.voxelize(0.5, false, None, None).unwrap();
+        let particles = processor.voxelize(0.5, false, None, None, None, None).unwrap();
         assert_eq!(
             particles.len(),
             8,
@@ -787,5 +880,138 @@ mod tests {
         assert!((processor.bounds_max.y - 1.0).abs() < 1e-5);
 
         std::fs::remove_file(file_path).unwrap();
+    }
+
+    #[test]
+    fn test_voxelize_infill_gyroid() {
+        let points = vec![
+            Point::new(0.0, 0.0, 0.0),
+            Point::new(10.0, 0.0, 0.0),
+            Point::new(10.0, 10.0, 0.0),
+            Point::new(0.0, 10.0, 0.0),
+            Point::new(0.0, 0.0, 10.0),
+            Point::new(10.0, 0.0, 10.0),
+            Point::new(10.0, 10.0, 10.0),
+            Point::new(0.0, 10.0, 10.0),
+        ];
+
+        let indices = vec![
+            [0, 1, 2], [0, 2, 3], // Front
+            [5, 4, 7], [5, 7, 6], // Back
+            [4, 5, 1], [4, 1, 0], // Bottom
+            [3, 2, 6], [3, 6, 7], // Top
+            [4, 0, 3], [4, 3, 7], // Left
+            [1, 5, 6], [1, 6, 2], // Right
+        ];
+
+        let mesh = TriMesh::new(points, indices);
+        let aabb = mesh.local_aabb();
+        let bounds_min = aabb.mins;
+        let bounds_max = aabb.maxs;
+
+        let processor = MeshProcessor {
+            mesh,
+            bounds_min,
+            bounds_max,
+        };
+
+        // Solid cube
+        let solid = processor.voxelize(1.0, false, None, None, None, None).unwrap();
+
+        // Gyroid infill
+        let infill_args = Some(("gyroid".to_string(), 2.0));
+        let gyroid = processor.voxelize(1.0, false, None, None, infill_args, None).unwrap();
+
+        assert!(gyroid.len() < solid.len(), "Gyroid infill should have fewer particles than solid");
+        assert!(gyroid.len() > 0, "Gyroid infill should generate some particles");
+    }
+
+    #[test]
+    fn test_voxelize_infill_grid() {
+        let points = vec![
+            Point::new(0.0, 0.0, 0.0),
+            Point::new(10.0, 0.0, 0.0),
+            Point::new(10.0, 10.0, 0.0),
+            Point::new(0.0, 10.0, 0.0),
+            Point::new(0.0, 0.0, 10.0),
+            Point::new(10.0, 0.0, 10.0),
+            Point::new(10.0, 10.0, 10.0),
+            Point::new(0.0, 10.0, 10.0),
+        ];
+
+        let indices = vec![
+            [0, 1, 2], [0, 2, 3],
+            [5, 4, 7], [5, 7, 6],
+            [4, 5, 1], [4, 1, 0],
+            [3, 2, 6], [3, 6, 7],
+            [4, 0, 3], [4, 3, 7],
+            [1, 5, 6], [1, 6, 2],
+        ];
+
+        let mesh = TriMesh::new(points, indices);
+        let aabb = mesh.local_aabb();
+        let bounds_min = aabb.mins;
+        let bounds_max = aabb.maxs;
+        let processor = MeshProcessor {
+            mesh,
+            bounds_min,
+            bounds_max,
+        };
+
+        let solid = processor.voxelize(1.0, false, None, None, None, None).unwrap();
+
+        let infill_args = Some(("grid".to_string(), 2.0));
+        let grid = processor.voxelize(1.0, false, None, None, infill_args, None).unwrap();
+
+        assert!(grid.len() < solid.len(), "Grid infill should have fewer particles than solid");
+        assert!(grid.len() > 0, "Grid infill should generate some particles");
+    }
+
+    #[test]
+    fn test_voxelize_noise() {
+        let points = vec![
+            Point::new(0.0, 0.0, 0.0),
+            Point::new(1.0, 0.0, 0.0),
+            Point::new(1.0, 1.0, 0.0),
+            Point::new(0.0, 1.0, 0.0),
+            Point::new(0.0, 0.0, 1.0),
+            Point::new(1.0, 0.0, 1.0),
+            Point::new(1.0, 1.0, 1.0),
+            Point::new(0.0, 1.0, 1.0),
+        ];
+
+        let indices = vec![
+            [0, 1, 2], [0, 2, 3],
+            [5, 4, 7], [5, 7, 6],
+            [4, 5, 1], [4, 1, 0],
+            [3, 2, 6], [3, 6, 7],
+            [4, 0, 3], [4, 3, 7],
+            [1, 5, 6], [1, 6, 2],
+        ];
+
+        let mesh = TriMesh::new(points, indices);
+        let aabb = mesh.local_aabb();
+        let bounds_min = aabb.mins;
+        let bounds_max = aabb.maxs;
+        let processor = MeshProcessor {
+            mesh,
+            bounds_min,
+            bounds_max,
+        };
+
+        let clean = processor.voxelize(0.5, false, None, None, None, None).unwrap();
+        let noisy = processor.voxelize(0.5, false, None, None, None, Some(0.1)).unwrap();
+
+        assert_eq!(clean.len(), noisy.len(), "Noise should not change particle count");
+
+        let mut diff_found = false;
+        for (c, n) in clean.iter().zip(noisy.iter()) {
+            if (c.x - n.x).abs() > 1e-5 || (c.y - n.y).abs() > 1e-5 || (c.z - n.z).abs() > 1e-5 {
+                diff_found = true;
+                break;
+            }
+        }
+
+        assert!(diff_found, "Particles should be perturbed by noise");
     }
 }

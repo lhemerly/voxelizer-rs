@@ -45,6 +45,15 @@ struct Args {
 
     #[arg(long)]
     threads: Option<usize>,
+
+    #[arg(long)]
+    infill_mode: Option<String>,
+
+    #[arg(long, default_value_t = 1.0)]
+    infill_scale: f64,
+
+    #[arg(long)]
+    voxel_noise: Option<f64>,
 }
 
 fn parse_vec4(s: &str) -> Result<[f64; 4], String> {
@@ -158,11 +167,14 @@ fn main() -> anyhow::Result<()> {
     };
 
     let processor = MeshProcessor::from_file(&args.input, &transform)?;
+    let infill = args.infill_mode.map(|m| (m, args.infill_scale));
     let particles = processor.voxelize(
         args.resolution,
         args.surface_only,
         args.narrow_band,
         args.phase_sphere,
+        infill,
+        args.voxel_noise,
     )?;
 
     println!("Generated {} particles.", particles.len());
@@ -177,6 +189,11 @@ fn main() -> anyhow::Result<()> {
     let mut writer = BufWriter::new(file);
 
     match extension.as_deref() {
+        Some("xyz") => {
+            for p in &particles {
+                writeln!(writer, "{} {} {}", p.x, p.y, p.z)?;
+            }
+        }
         Some("csv") => {
             writeln!(writer, "x,y,z,phase")?;
             for p in &particles {
