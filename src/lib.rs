@@ -71,7 +71,7 @@ impl MeshProcessor {
             None => anyhow::bail!("Missing file extension"),
         };
 
-        if let Some(r) = transform.rotate {
+        let rotation_iso = if let Some(r) = transform.rotate {
             let rx = r[0].to_radians();
             let ry = r[1].to_radians();
             let rz = r[2].to_radians();
@@ -80,77 +80,93 @@ impl MeshProcessor {
             let rot_y = nalgebra::Rotation3::from_axis_angle(&nalgebra::Vector3::y_axis(), ry);
             let rot_z = nalgebra::Rotation3::from_axis_angle(&nalgebra::Vector3::z_axis(), rz);
 
-            let rotation = rot_z * rot_y * rot_x;
+            Some(rot_z * rot_y * rot_x)
+        } else {
+            None
+        };
 
-            for p in &mut points {
-                *p = rotation * *p;
-            }
-        }
-
+        let mut center_offset = Point3::new(0.0, 0.0, 0.0);
         if transform.center {
             let mut min = Point3::new(f64::MAX, f64::MAX, f64::MAX);
             let mut max = Point3::new(f64::MIN, f64::MIN, f64::MIN);
             for p in &points {
-                min.x = min.x.min(p.x);
-                min.y = min.y.min(p.y);
-                min.z = min.z.min(p.z);
-                max.x = max.x.max(p.x);
-                max.y = max.y.max(p.y);
-                max.z = max.z.max(p.z);
+                let p_rot = if let Some(rot) = rotation_iso {
+                    rot * p
+                } else {
+                    *p
+                };
+                min.x = min.x.min(p_rot.x);
+                min.y = min.y.min(p_rot.y);
+                min.z = min.z.min(p_rot.z);
+                max.x = max.x.max(p_rot.x);
+                max.y = max.y.max(p_rot.y);
+                max.z = max.z.max(p_rot.z);
             }
-            let center = Point3::new(
+            center_offset = Point3::new(
                 (min.x + max.x) * 0.5,
                 (min.y + max.y) * 0.5,
                 (min.z + max.z) * 0.5,
             );
-            for p in &mut points {
-                p.x -= center.x;
-                p.y -= center.y;
-                p.z -= center.z;
-            }
         }
 
-        if (transform.scale - 1.0).abs() > f64::EPSILON {
-            for p in &mut points {
-                p.x *= transform.scale;
-                p.y *= transform.scale;
-                p.z *= transform.scale;
-            }
-        }
+        let scale = if (transform.scale - 1.0).abs() > f64::EPSILON {
+            transform.scale
+        } else {
+            1.0
+        };
 
-        if let Some(t) = transform.translate {
-            for p in &mut points {
+        let t = transform.translate.unwrap_or([0.0, 0.0, 0.0]);
+        let noise_amp = transform.vertex_noise.unwrap_or(0.0);
+        let mut seed = 123456789u32;
+
+        let mut bounds_min = Point3::new(f64::MAX, f64::MAX, f64::MAX);
+        let mut bounds_max = Point3::new(f64::MIN, f64::MIN, f64::MIN);
+
+        for p in &mut points {
+            if let Some(rot) = rotation_iso {
+                *p = rot * *p;
+            }
+
+            if transform.center {
+                p.x -= center_offset.x;
+                p.y -= center_offset.y;
+                p.z -= center_offset.z;
+            }
+
+            if scale != 1.0 {
+                p.x *= scale;
+                p.y *= scale;
+                p.z *= scale;
+            }
+
+            if transform.translate.is_some() {
                 p.x += t[0];
                 p.y += t[1];
                 p.z += t[2];
             }
-        }
 
-        #[allow(clippy::collapsible_if)]
-        if let Some(amp) = transform.vertex_noise {
-            if amp > 0.0 {
-                // Simple, fast pseudo-random number generator for noise
-                let mut seed = 123456789u32;
-                for p in &mut points {
-                    seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
-                    let rx = (seed as f64 / u32::MAX as f64) * 2.0 - 1.0;
-                    seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
-                    let ry = (seed as f64 / u32::MAX as f64) * 2.0 - 1.0;
-                    seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
-                    let rz = (seed as f64 / u32::MAX as f64) * 2.0 - 1.0;
+            if noise_amp > 0.0 {
+                seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+                let rx = (seed as f64 / u32::MAX as f64) * 2.0 - 1.0;
+                seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+                let ry = (seed as f64 / u32::MAX as f64) * 2.0 - 1.0;
+                seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+                let rz = (seed as f64 / u32::MAX as f64) * 2.0 - 1.0;
 
-                    p.x += rx * amp;
-                    p.y += ry * amp;
-                    p.z += rz * amp;
-                }
+                p.x += rx * noise_amp;
+                p.y += ry * noise_amp;
+                p.z += rz * noise_amp;
             }
+
+            bounds_min.x = bounds_min.x.min(p.x);
+            bounds_min.y = bounds_min.y.min(p.y);
+            bounds_min.z = bounds_min.z.min(p.z);
+            bounds_max.x = bounds_max.x.max(p.x);
+            bounds_max.y = bounds_max.y.max(p.y);
+            bounds_max.z = bounds_max.z.max(p.z);
         }
 
         let mesh = TriMesh::new(points, indices);
-        let aabb = mesh.local_aabb();
-
-        let mut bounds_min = aabb.mins;
-        let mut bounds_max = aabb.maxs;
 
         if let Some(crop) = transform.crop {
             bounds_min.x = bounds_min.x.max(crop[0]);
@@ -333,21 +349,36 @@ impl MeshProcessor {
                     // Because rays are cast along the +X direction, doing X sequentially
                     // keeps the raycast traversals in the same BVH region,
                     // while parallelizing over (Y, Z) ensures finer granularity for Rayon.
+                    let mut hit_idx = 0;
+                    let num_hits = hit_xs.len();
+
+                    let (sphere_x, sphere_r2, sphere_dy_dz) = if let Some(sphere) = phase_sphere {
+                        let dy = y - sphere[1];
+                        let dz = z - sphere[2];
+                        (sphere[0], sphere[3] * sphere[3], dy * dy + dz * dz)
+                    } else {
+                        (0.0, 0.0, 0.0)
+                    };
+
+                    let base_x = bounds_min.x + resolution * 0.5;
+
                     if surface_only {
                         let half_res = resolution * 0.5;
                         let cuboid = Cuboid::new(Vector::new(half_res, half_res, half_res));
                         let mesh_iso = Isometry::identity();
 
                         for ix in 0..nx {
-                            let x = bounds_min.x + (ix as f64 * resolution) + (resolution * 0.5);
+                            let x = base_x + (ix as f64 * resolution);
                             let point = Point::new(x, y, z);
                             let voxel_iso = Isometry::translation(point.x, point.y, point.z);
 
                             if let Ok(true) =
                                 intersection_test(&mesh_iso, &self.mesh, &voxel_iso, &cuboid)
                             {
-                                let intersections_to_right =
-                                    hit_xs.len() - hit_xs.partition_point(|&hx| hx <= x);
+                                while hit_idx < num_hits && hit_xs[hit_idx] <= x {
+                                    hit_idx += 1;
+                                }
+                                let intersections_to_right = num_hits - hit_idx;
                                 let is_inside = intersections_to_right % 2 != 0;
 
                                 let distance =
@@ -364,12 +395,9 @@ impl MeshProcessor {
 
                                 if keep {
                                     let mut phase = 0;
-                                    if let Some(sphere) = phase_sphere {
-                                        let dx = x - sphere[0];
-                                        let dy = y - sphere[1];
-                                        let dz = z - sphere[2];
-                                        let r2 = sphere[3] * sphere[3];
-                                        if dx * dx + dy * dy + dz * dz <= r2 {
+                                    if phase_sphere.is_some() {
+                                        let dx = x - sphere_x;
+                                        if dx * dx + sphere_dy_dz <= sphere_r2 {
                                             phase = 1;
                                         }
                                     }
@@ -388,34 +416,34 @@ impl MeshProcessor {
                         }
                     } else {
                         for ix in 0..nx {
-                            let x = bounds_min.x + (ix as f64 * resolution) + (resolution * 0.5);
+                            let x = base_x + (ix as f64 * resolution);
                             let point_3d = Point::new(x, y, z);
 
-                            // A point is inside if it has an odd number of intersections to its right (or left).
-                            // hit_xs is sorted, so we can use partition_point for O(log N) lookup.
-                            let intersections_to_right =
-                                hit_xs.len() - hit_xs.partition_point(|&hx| hx <= x);
-
+                            while hit_idx < num_hits && hit_xs[hit_idx] <= x {
+                                hit_idx += 1;
+                            }
+                            let intersections_to_right = num_hits - hit_idx;
                             let is_inside = intersections_to_right % 2 != 0;
 
-                            let distance =
-                                self.mesh.distance_to_local_point(&point_3d, false) as f32;
-                            let sdf = if is_inside { -distance } else { distance };
+                            let sdf = if is_inside || narrow_band.is_some() {
+                                let distance =
+                                    self.mesh.distance_to_local_point(&point_3d, false) as f32;
+                                if is_inside { -distance } else { distance }
+                            } else {
+                                0.0
+                            };
 
                             let keep = if let Some(band) = narrow_band {
                                 sdf.abs() <= band as f32
                             } else {
-                                sdf <= 0.0
+                                is_inside
                             };
 
                             if keep {
                                 let mut phase = 0;
-                                if let Some(sphere) = phase_sphere {
-                                    let dx = x - sphere[0];
-                                    let dy = y - sphere[1];
-                                    let dz = z - sphere[2];
-                                    let r2 = sphere[3] * sphere[3];
-                                    if dx * dx + dy * dy + dz * dz <= r2 {
+                                if phase_sphere.is_some() {
+                                    let dx = x - sphere_x;
+                                    if dx * dx + sphere_dy_dz <= sphere_r2 {
                                         phase = 1;
                                     }
                                 }
