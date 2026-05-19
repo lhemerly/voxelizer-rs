@@ -313,7 +313,10 @@ impl MeshProcessor {
                     let mut current_ray = ray;
                     let max_dist = (bounds_max.x.max(self.bounds_max.x) - start_x) + 1.0;
 
-                    let mut hit_xs = Vec::new();
+                    // Pre-allocate capacity to reduce reallocations when a ray hits multiple triangles.
+                    // This is an optimization for complex meshes, although it will force an allocation
+                    // even on a miss, the amortized cost for a hit is typically much lower.
+                    let mut hit_xs = Vec::with_capacity(8);
                     while let Some(hit_toi) = self.mesh.cast_local_ray(&current_ray, max_dist, true)
                     {
                         let hit_point = current_ray.point_at(hit_toi);
