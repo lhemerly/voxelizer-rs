@@ -176,11 +176,23 @@ fn main() -> anyhow::Result<()> {
     let file = File::create(&args.output)?;
     let mut writer = BufWriter::new(file);
 
-    match extension.as_deref() {
+    export_particles(&mut writer, extension.as_deref(), &particles, args.resolution)?;
+
+    println!("Saved to {}", args.output);
+    Ok(())
+}
+
+pub fn export_particles<W: Write>(
+    writer: &mut W,
+    extension: Option<&str>,
+    particles: &[voxelizer_rs::ParticleData],
+    resolution: f64,
+) -> anyhow::Result<()> {
+    match extension {
         Some("csv") => {
-            writeln!(writer, "x,y,z,phase")?;
-            for p in &particles {
-                writeln!(writer, "{},{},{},{}", p.x, p.y, p.z, p.phase)?;
+            writeln!(writer, "x,y,z,phase,sdf")?;
+            for p in particles {
+                writeln!(writer, "{},{},{},{},{}", p.x, p.y, p.z, p.phase, p.sdf)?;
             }
         }
         Some("ply") => {
@@ -190,9 +202,10 @@ fn main() -> anyhow::Result<()> {
             writeln!(writer, "property float x")?;
             writeln!(writer, "property float y")?;
             writeln!(writer, "property float z")?;
+            writeln!(writer, "property float sdf")?;
             writeln!(writer, "end_header")?;
-            for p in &particles {
-                writeln!(writer, "{} {} {}", p.x, p.y, p.z)?;
+            for p in particles {
+                writeln!(writer, "{} {} {} {}", p.x, p.y, p.z, p.sdf)?;
             }
         }
         Some("vtk") => {
@@ -201,14 +214,19 @@ fn main() -> anyhow::Result<()> {
             writeln!(writer, "ASCII")?;
             writeln!(writer, "DATASET POLYDATA")?;
             writeln!(writer, "POINTS {} float", particles.len())?;
-            for p in &particles {
+            for p in particles {
                 writeln!(writer, "{} {} {}", p.x, p.y, p.z)?;
             }
             writeln!(writer, "POINT_DATA {}", particles.len())?;
             writeln!(writer, "SCALARS phase int 1")?;
             writeln!(writer, "LOOKUP_TABLE default")?;
-            for p in &particles {
+            for p in particles {
                 writeln!(writer, "{}", p.phase)?;
+            }
+            writeln!(writer, "SCALARS sdf float 1")?;
+            writeln!(writer, "LOOKUP_TABLE default")?;
+            for p in particles {
+                writeln!(writer, "{}", p.sdf)?;
             }
         }
         Some("vox") => {
@@ -224,7 +242,7 @@ fn main() -> anyhow::Result<()> {
             let mut max_y = f32::MIN;
             let mut max_z = f32::MIN;
 
-            for p in &particles {
+            for p in particles {
                 if p.x < min_x {
                     min_x = p.x;
                 }
@@ -245,7 +263,7 @@ fn main() -> anyhow::Result<()> {
                 }
             }
 
-            let res = args.resolution as f32;
+            let res = resolution as f32;
             let mut size_x = ((max_x - min_x) / res).round() as u32 + 1;
             let mut size_y = ((max_y - min_y) / res).round() as u32 + 1;
             let mut size_z = ((max_z - min_z) / res).round() as u32 + 1;
@@ -289,7 +307,7 @@ fn main() -> anyhow::Result<()> {
             writer.write_all(&0u32.to_le_bytes())?;
             writer.write_all(&num_voxels.to_le_bytes())?;
 
-            for p in &particles {
+            for p in particles {
                 let mut vx = ((p.x - min_x) / res).round() as i32;
                 let mut vy = ((p.y - min_y) / res).round() as i32;
                 let mut vz = ((p.z - min_z) / res).round() as i32;
@@ -304,7 +322,7 @@ fn main() -> anyhow::Result<()> {
             }
         }
         Some("obj") => {
-            for p in &particles {
+            for p in particles {
                 writeln!(writer, "v {} {} {}", p.x, p.y, p.z)?;
             }
         }
@@ -313,14 +331,49 @@ fn main() -> anyhow::Result<()> {
             let header = ParticleHeader {
                 version: 2,
                 particle_count: particles.len() as u64,
-                resolution: args.resolution,
+                resolution: resolution,
             };
 
-            bincode::serialize_into(&mut writer, &header)?;
-            bincode::serialize_into(&mut writer, &particles)?;
+            bincode::serialize_into(&mut *writer, &header)?;
+            bincode::serialize_into(&mut *writer, &particles)?;
         }
     }
 
-    println!("Saved to {}", args.output);
     Ok(())
+}
+
+#[cfg(test)]
+mod export_tests {
+    use super::*;
+    use voxelizer_rs::ParticleData;
+
+    #[test]
+    fn test_export_csv_ply_vtk_sdf() {
+        let particles = vec![
+            ParticleData {
+                x: 1.0, y: 2.0, z: 3.0, sdf: -0.5, phase: 1, label_id: 0, fiber_x: 0.0, fiber_y: 0.0,
+            }
+        ];
+
+        // Test CSV
+        let mut csv_out = Vec::new();
+        export_particles(&mut csv_out, Some("csv"), &particles, 1.0).unwrap();
+        let csv_str = String::from_utf8(csv_out).unwrap();
+        assert!(csv_str.contains("x,y,z,phase,sdf"));
+        assert!(csv_str.contains("1,2,3,1,-0.5"));
+
+        // Test PLY
+        let mut ply_out = Vec::new();
+        export_particles(&mut ply_out, Some("ply"), &particles, 1.0).unwrap();
+        let ply_str = String::from_utf8(ply_out).unwrap();
+        assert!(ply_str.contains("property float sdf"));
+        assert!(ply_str.contains("1 2 3 -0.5"));
+
+        // Test VTK
+        let mut vtk_out = Vec::new();
+        export_particles(&mut vtk_out, Some("vtk"), &particles, 1.0).unwrap();
+        let vtk_str = String::from_utf8(vtk_out).unwrap();
+        assert!(vtk_str.contains("SCALARS sdf float 1"));
+        assert!(vtk_str.contains("-0.5"));
+    }
 }
