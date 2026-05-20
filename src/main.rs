@@ -44,6 +44,12 @@ struct Args {
     phase_sphere: Option<[f64; 4]>,
 
     #[arg(long)]
+    porous: Option<f64>,
+
+    #[arg(long)]
+    concentric_phases: Option<f64>,
+
+    #[arg(long)]
     threads: Option<usize>,
 }
 
@@ -163,6 +169,8 @@ fn main() -> anyhow::Result<()> {
         args.surface_only,
         args.narrow_band,
         args.phase_sphere,
+        args.porous,
+        args.concentric_phases,
     )?;
 
     println!("Generated {} particles.", particles.len());
