@@ -252,6 +252,8 @@ impl MeshProcessor {
         surface_only: bool,
         narrow_band: Option<f64>,
         phase_sphere: Option<[f64; 4]>,
+        porous: Option<f64>,
+        concentric_phases: Option<f64>,
     ) -> Result<Vec<ParticleData>> {
         if !resolution.is_finite() || resolution <= 1e-6 {
             anyhow::bail!(
@@ -362,6 +364,15 @@ impl MeshProcessor {
                                     true
                                 };
 
+                                let keep = if keep && porous.is_some() {
+                                    let threshold = porous.unwrap();
+                                    let hash = (ix as u64).wrapping_mul(73856093) ^ (iy as u64).wrapping_mul(19349663) ^ (iz as u64).wrapping_mul(83492791);
+                                    let rnd = (hash as f64) / (u64::MAX as f64);
+                                    rnd <= threshold
+                                } else {
+                                    keep
+                                };
+
                                 if keep {
                                     let mut phase = 0;
                                     if let Some(sphere) = phase_sphere {
@@ -372,6 +383,9 @@ impl MeshProcessor {
                                         if dx * dx + dy * dy + dz * dz <= r2 {
                                             phase = 1;
                                         }
+                                    }
+                                    if let Some(step) = concentric_phases {
+                                        phase = (sdf.abs() as f64 / step) as u32;
                                     }
                                     local_particles.push(ParticleData {
                                         x: x as f32,
@@ -408,6 +422,15 @@ impl MeshProcessor {
                                 sdf <= 0.0
                             };
 
+                            let keep = if keep && porous.is_some() {
+                                let threshold = porous.unwrap();
+                                let hash = (ix as u64).wrapping_mul(73856093) ^ (iy as u64).wrapping_mul(19349663) ^ (iz as u64).wrapping_mul(83492791);
+                                let rnd = (hash as f64) / (u64::MAX as f64);
+                                rnd <= threshold
+                            } else {
+                                keep
+                            };
+
                             if keep {
                                 let mut phase = 0;
                                 if let Some(sphere) = phase_sphere {
@@ -418,6 +441,9 @@ impl MeshProcessor {
                                     if dx * dx + dy * dy + dz * dz <= r2 {
                                         phase = 1;
                                     }
+                                }
+                                if let Some(step) = concentric_phases {
+                                    phase = (sdf.abs() as f64 / step) as u32;
                                 }
                                 local_particles.push(ParticleData {
                                     x: x as f32,
@@ -466,7 +492,7 @@ mod tests {
         };
 
         let check_err = |res: f64| {
-            let err = processor.voxelize(res, false, None, None).unwrap_err();
+            let err = processor.voxelize(res, false, None, None, None, None).unwrap_err();
             assert_eq!(
                 err.to_string(),
                 format!(
@@ -482,7 +508,7 @@ mod tests {
         check_err(f64::NAN);
         check_err(f64::INFINITY);
 
-        assert!(processor.voxelize(0.5, false, None, None).is_ok());
+        assert!(processor.voxelize(0.5, false, None, None, None, None).is_ok());
     }
 
     #[test]
@@ -504,7 +530,7 @@ mod tests {
 
         let assert_narrow_band_error = |band: f64| {
             let err = processor
-                .voxelize(0.5, false, Some(band), None)
+                .voxelize(0.5, false, Some(band), None, None, None)
                 .unwrap_err();
             assert_eq!(
                 err.to_string(),
@@ -520,8 +546,8 @@ mod tests {
         assert_narrow_band_error(f64::INFINITY);
         assert_narrow_band_error(f64::NEG_INFINITY);
 
-        assert!(processor.voxelize(0.5, false, Some(0.0), None).is_ok());
-        assert!(processor.voxelize(0.5, false, Some(2.0), None).is_ok());
+        assert!(processor.voxelize(0.5, false, Some(0.0), None, None, None).is_ok());
+        assert!(processor.voxelize(0.5, false, Some(2.0), None, None, None).is_ok());
     }
 
     #[test]
@@ -563,7 +589,7 @@ mod tests {
             bounds_max,
         };
 
-        let particles = processor.voxelize(0.5, false, None, None).unwrap();
+        let particles = processor.voxelize(0.5, false, None, None, None, None).unwrap();
         assert_eq!(
             particles.len(),
             8,
