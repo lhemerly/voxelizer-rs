@@ -313,7 +313,7 @@ impl MeshProcessor {
                     let mut current_ray = ray;
                     let max_dist = (bounds_max.x.max(self.bounds_max.x) - start_x) + 1.0;
 
-                    let mut hit_xs = Vec::new();
+                    let mut hit_xs = Vec::with_capacity(8);
                     while let Some(hit_toi) = self.mesh.cast_local_ray(&current_ray, max_dist, true)
                     {
                         let hit_point = current_ray.point_at(hit_toi);
@@ -333,21 +333,33 @@ impl MeshProcessor {
                     // Because rays are cast along the +X direction, doing X sequentially
                     // keeps the raycast traversals in the same BVH region,
                     // while parallelizing over (Y, Z) ensures finer granularity for Rayon.
+
+                    let base_x = bounds_min.x + resolution * 0.5;
+                    let phase_sphere_data = phase_sphere.map(|s| {
+                        let dy = y - s[1];
+                        let dz = z - s[2];
+                        (s[0], dy * dy + dz * dz, s[3] * s[3])
+                    });
+
                     if surface_only {
                         let half_res = resolution * 0.5;
                         let cuboid = Cuboid::new(Vector::new(half_res, half_res, half_res));
                         let mesh_iso = Isometry::identity();
 
+                        let mut hit_idx = 0;
+
                         for ix in 0..nx {
-                            let x = bounds_min.x + (ix as f64 * resolution) + (resolution * 0.5);
+                            let x = base_x + (ix as f64 * resolution);
                             let point = Point::new(x, y, z);
                             let voxel_iso = Isometry::translation(point.x, point.y, point.z);
 
                             if let Ok(true) =
                                 intersection_test(&mesh_iso, &self.mesh, &voxel_iso, &cuboid)
                             {
-                                let intersections_to_right =
-                                    hit_xs.len() - hit_xs.partition_point(|&hx| hx <= x);
+                                while hit_idx < hit_xs.len() && hit_xs[hit_idx] <= x {
+                                    hit_idx += 1;
+                                }
+                                let intersections_to_right = hit_xs.len() - hit_idx;
                                 let is_inside = intersections_to_right % 2 != 0;
 
                                 let distance =
@@ -364,12 +376,9 @@ impl MeshProcessor {
 
                                 if keep {
                                     let mut phase = 0;
-                                    if let Some(sphere) = phase_sphere {
-                                        let dx = x - sphere[0];
-                                        let dy = y - sphere[1];
-                                        let dz = z - sphere[2];
-                                        let r2 = sphere[3] * sphere[3];
-                                        if dx * dx + dy * dy + dz * dz <= r2 {
+                                    if let Some((sx, dy2_dz2, r2)) = phase_sphere_data {
+                                        let dx = x - sx;
+                                        if dx * dx + dy2_dz2 <= r2 {
                                             phase = 1;
                                         }
                                     }
@@ -387,14 +396,15 @@ impl MeshProcessor {
                             }
                         }
                     } else {
+                        let mut hit_idx = 0;
                         for ix in 0..nx {
-                            let x = bounds_min.x + (ix as f64 * resolution) + (resolution * 0.5);
+                            let x = base_x + (ix as f64 * resolution);
                             let point_3d = Point::new(x, y, z);
 
-                            // A point is inside if it has an odd number of intersections to its right (or left).
-                            // hit_xs is sorted, so we can use partition_point for O(log N) lookup.
-                            let intersections_to_right =
-                                hit_xs.len() - hit_xs.partition_point(|&hx| hx <= x);
+                            while hit_idx < hit_xs.len() && hit_xs[hit_idx] <= x {
+                                hit_idx += 1;
+                            }
+                            let intersections_to_right = hit_xs.len() - hit_idx;
 
                             let is_inside = intersections_to_right % 2 != 0;
 
@@ -410,12 +420,9 @@ impl MeshProcessor {
 
                             if keep {
                                 let mut phase = 0;
-                                if let Some(sphere) = phase_sphere {
-                                    let dx = x - sphere[0];
-                                    let dy = y - sphere[1];
-                                    let dz = z - sphere[2];
-                                    let r2 = sphere[3] * sphere[3];
-                                    if dx * dx + dy * dy + dz * dz <= r2 {
+                                if let Some((sx, dy2_dz2, r2)) = phase_sphere_data {
+                                    let dx = x - sx;
+                                    if dx * dx + dy2_dz2 <= r2 {
                                         phase = 1;
                                     }
                                 }
