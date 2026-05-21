@@ -43,6 +43,12 @@ struct Args {
     #[arg(long, value_parser = parse_vec4)]
     phase_sphere: Option<[f64; 4]>,
 
+    #[arg(long, value_parser = validate_porous)]
+    porous: Option<f64>,
+
+    #[arg(long)]
+    concentric_phases: Option<f64>,
+
     #[arg(long)]
     threads: Option<usize>,
 }
@@ -113,6 +119,17 @@ fn parse_vec3(s: &str) -> Result<[f64; 3], String> {
     Ok([x, y, z])
 }
 
+fn validate_porous(s: &str) -> Result<f64, String> {
+    let val: f64 = s.parse().map_err(|_| format!("`{s}` isn't a number"))?;
+    if (0.0..=1.0).contains(&val) {
+        Ok(val)
+    } else {
+        Err(format!(
+            "Porous probability must be between 0.0 and 1.0. Provided: {s}"
+        ))
+    }
+}
+
 fn validate_resolution(s: &str) -> Result<f64, String> {
     let val: f64 = s.parse().map_err(|_| format!("`{s}` isn't a number"))?;
     if val.is_finite() && val > 1e-6 {
@@ -163,6 +180,8 @@ fn main() -> anyhow::Result<()> {
         args.surface_only,
         args.narrow_band,
         args.phase_sphere,
+        args.porous,
+        args.concentric_phases,
     )?;
 
     println!("Generated {} particles.", particles.len());

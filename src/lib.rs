@@ -246,12 +246,15 @@ impl MeshProcessor {
         Ok((points, indices))
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn voxelize(
         &self,
         resolution: f64,
         surface_only: bool,
         narrow_band: Option<f64>,
         phase_sphere: Option<[f64; 4]>,
+        porous: Option<f64>,
+        concentric_phases: Option<f64>,
     ) -> Result<Vec<ParticleData>> {
         if !resolution.is_finite() || resolution <= 1e-6 {
             anyhow::bail!(
@@ -363,8 +366,25 @@ impl MeshProcessor {
                                 };
 
                                 if keep {
+                                    if let Some(p) = porous {
+                                        // Simple deterministic hash
+                                        let mut hash = 123456789u32;
+                                        hash = hash.wrapping_mul(1664525).wrapping_add(ix as u32);
+                                        hash = hash.wrapping_mul(1664525).wrapping_add(iy as u32);
+                                        hash = hash.wrapping_mul(1664525).wrapping_add(iz as u32);
+                                        if (hash as f64 / u32::MAX as f64) < p {
+                                            continue;
+                                        }
+                                    }
+
                                     let mut phase = 0;
-                                    if let Some(sphere) = phase_sphere {
+                                    if let Some(spacing) = concentric_phases {
+                                        let center_x = (self.bounds_min.x + self.bounds_max.x) * 0.5;
+                                        let center_y = (self.bounds_min.y + self.bounds_max.y) * 0.5;
+                                        let center_z = (self.bounds_min.z + self.bounds_max.z) * 0.5;
+                                        let dist = ((x - center_x).powi(2) + (y - center_y).powi(2) + (z - center_z).powi(2)).sqrt();
+                                        phase = (dist / spacing) as u32 % 2;
+                                    } else if let Some(sphere) = phase_sphere {
                                         let dx = x - sphere[0];
                                         let dy = y - sphere[1];
                                         let dz = z - sphere[2];
@@ -409,8 +429,25 @@ impl MeshProcessor {
                             };
 
                             if keep {
+                                if let Some(p) = porous {
+                                    // Simple deterministic hash
+                                    let mut hash = 123456789u32;
+                                    hash = hash.wrapping_mul(1664525).wrapping_add(ix as u32);
+                                    hash = hash.wrapping_mul(1664525).wrapping_add(iy as u32);
+                                    hash = hash.wrapping_mul(1664525).wrapping_add(iz as u32);
+                                    if (hash as f64 / u32::MAX as f64) < p {
+                                        continue;
+                                    }
+                                }
+
                                 let mut phase = 0;
-                                if let Some(sphere) = phase_sphere {
+                                if let Some(spacing) = concentric_phases {
+                                    let center_x = (self.bounds_min.x + self.bounds_max.x) * 0.5;
+                                    let center_y = (self.bounds_min.y + self.bounds_max.y) * 0.5;
+                                    let center_z = (self.bounds_min.z + self.bounds_max.z) * 0.5;
+                                    let dist = ((x - center_x).powi(2) + (y - center_y).powi(2) + (z - center_z).powi(2)).sqrt();
+                                    phase = (dist / spacing) as u32 % 2;
+                                } else if let Some(sphere) = phase_sphere {
                                     let dx = x - sphere[0];
                                     let dy = y - sphere[1];
                                     let dz = z - sphere[2];
@@ -466,7 +503,7 @@ mod tests {
         };
 
         let check_err = |res: f64| {
-            let err = processor.voxelize(res, false, None, None).unwrap_err();
+            let err = processor.voxelize(res, false, None, None, None, None).unwrap_err();
             assert_eq!(
                 err.to_string(),
                 format!(
@@ -482,7 +519,7 @@ mod tests {
         check_err(f64::NAN);
         check_err(f64::INFINITY);
 
-        assert!(processor.voxelize(0.5, false, None, None).is_ok());
+        assert!(processor.voxelize(0.5, false, None, None, None, None).is_ok());
     }
 
     #[test]
@@ -504,7 +541,7 @@ mod tests {
 
         let assert_narrow_band_error = |band: f64| {
             let err = processor
-                .voxelize(0.5, false, Some(band), None)
+                .voxelize(0.5, false, Some(band), None, None, None)
                 .unwrap_err();
             assert_eq!(
                 err.to_string(),
@@ -520,8 +557,8 @@ mod tests {
         assert_narrow_band_error(f64::INFINITY);
         assert_narrow_band_error(f64::NEG_INFINITY);
 
-        assert!(processor.voxelize(0.5, false, Some(0.0), None).is_ok());
-        assert!(processor.voxelize(0.5, false, Some(2.0), None).is_ok());
+        assert!(processor.voxelize(0.5, false, Some(0.0), None, None, None).is_ok());
+        assert!(processor.voxelize(0.5, false, Some(2.0), None, None, None).is_ok());
     }
 
     #[test]
@@ -563,7 +600,7 @@ mod tests {
             bounds_max,
         };
 
-        let particles = processor.voxelize(0.5, false, None, None).unwrap();
+        let particles = processor.voxelize(0.5, false, None, None, None, None).unwrap();
         assert_eq!(
             particles.len(),
             8,
