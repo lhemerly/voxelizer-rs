@@ -43,8 +43,34 @@ struct Args {
     #[arg(long, value_parser = parse_vec4)]
     phase_sphere: Option<[f64; 4]>,
 
+    #[arg(long, value_parser = parse_vec2)]
+    twist: Option<[f64; 2]>,
+
+    #[arg(long, value_parser = parse_vec3)]
+    wave: Option<[f64; 3]>,
+
+    #[arg(long)]
+    hollow_thickness: Option<f64>,
+
+    #[arg(long)]
+    concentric_phases: Option<f64>,
+
     #[arg(long)]
     threads: Option<usize>,
+}
+
+fn parse_vec2(s: &str) -> Result<[f64; 2], String> {
+    let parts: Vec<&str> = s.split(',').collect();
+    if parts.len() != 2 {
+        return Err(format!("Expected 'value1,value2', got '{}'", s));
+    }
+    let v0 = parts[0]
+        .parse()
+        .map_err(|_| format!("Invalid value: {}", parts[0]))?;
+    let v1 = parts[1]
+        .parse()
+        .map_err(|_| format!("Invalid value: {}", parts[1]))?;
+    Ok([v0, v1])
 }
 
 fn parse_vec4(s: &str) -> Result<[f64; 4], String> {
@@ -155,6 +181,8 @@ fn main() -> anyhow::Result<()> {
         rotate: args.rotate,
         crop: args.crop,
         vertex_noise: args.vertex_noise,
+        twist: args.twist,
+        wave: args.wave,
     };
 
     let processor = MeshProcessor::from_file(&args.input, &transform)?;
@@ -163,6 +191,8 @@ fn main() -> anyhow::Result<()> {
         args.surface_only,
         args.narrow_band,
         args.phase_sphere,
+        args.hollow_thickness,
+        args.concentric_phases,
     )?;
 
     println!("Generated {} particles.", particles.len());
