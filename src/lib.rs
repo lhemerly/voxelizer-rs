@@ -37,6 +37,8 @@ pub struct TransformConfig {
     pub rotate: Option<[f64; 3]>,  // x, y, z in degrees
     pub crop: Option<[f64; 6]>,    // min_x, min_y, min_z, max_x, max_y, max_z
     pub vertex_noise: Option<f64>, // random displacement amplitude
+    pub twist: Option<[f64; 2]>,   // angle_per_unit, axis (0=x, 1=y, 2=z)
+    pub wave: Option<[f64; 3]>,    // amplitude, frequency, axis (0=x, 1=y, 2=z)
 }
 
 impl Default for TransformConfig {
@@ -48,6 +50,8 @@ impl Default for TransformConfig {
             rotate: None,
             crop: None,
             vertex_noise: None,
+            twist: None,
+            wave: None,
         }
     }
 }
@@ -142,6 +146,55 @@ impl MeshProcessor {
                     p.x += rx * amp;
                     p.y += ry * amp;
                     p.z += rz * amp;
+                }
+            }
+        }
+
+        if let Some(twist) = transform.twist {
+            let angle_per_unit = twist[0].to_radians();
+            let axis = twist[1] as u8;
+            for p in &mut points {
+                let (h, c1, c2) = match axis {
+                    0 => (p.x, p.y, p.z),
+                    1 => (p.y, p.x, p.z),
+                    _ => (p.z, p.x, p.y),
+                };
+                let angle = h * angle_per_unit;
+                let s = angle.sin();
+                let c = angle.cos();
+                let new_c1 = c1 * c - c2 * s;
+                let new_c2 = c1 * s + c2 * c;
+                match axis {
+                    0 => {
+                        p.y = new_c1;
+                        p.z = new_c2;
+                    }
+                    1 => {
+                        p.x = new_c1;
+                        p.z = new_c2;
+                    }
+                    _ => {
+                        p.x = new_c1;
+                        p.y = new_c2;
+                    }
+                }
+            }
+        }
+
+        if let Some(wave) = transform.wave {
+            let amp = wave[0];
+            let freq = wave[1];
+            let axis = wave[2] as u8;
+            for p in &mut points {
+                let disp = match axis {
+                    0 => (p.y * freq).sin() * amp,
+                    1 => (p.z * freq).sin() * amp,
+                    _ => (p.x * freq).sin() * amp,
+                };
+                match axis {
+                    0 => p.x += disp,
+                    1 => p.y += disp,
+                    _ => p.z += disp,
                 }
             }
         }
@@ -252,6 +305,8 @@ impl MeshProcessor {
         surface_only: bool,
         narrow_band: Option<f64>,
         phase_sphere: Option<[f64; 4]>,
+        hollow_thickness: Option<f64>,
+        concentric_phases: Option<f64>,
     ) -> Result<Vec<ParticleData>> {
         if !resolution.is_finite() || resolution <= 1e-6 {
             anyhow::bail!(
@@ -373,6 +428,11 @@ impl MeshProcessor {
                                             phase = 1;
                                         }
                                     }
+                                    if let Some(spacing) = concentric_phases {
+                                        if is_inside {
+                                            phase = ((-sdf / spacing as f32).floor() as u32) % 2 + 1;
+                                        }
+                                    }
                                     local_particles.push(ParticleData {
                                         x: x as f32,
                                         y: y as f32,
@@ -402,11 +462,19 @@ impl MeshProcessor {
                                 self.mesh.distance_to_local_point(&point_3d, false) as f32;
                             let sdf = if is_inside { -distance } else { distance };
 
-                            let keep = if let Some(band) = narrow_band {
+                            let mut keep = if let Some(band) = narrow_band {
                                 sdf.abs() <= band as f32
                             } else {
                                 sdf <= 0.0
                             };
+
+                            if keep {
+                                if let Some(thickness) = hollow_thickness {
+                                    if -sdf > thickness as f32 {
+                                        keep = false;
+                                    }
+                                }
+                            }
 
                             if keep {
                                 let mut phase = 0;
@@ -417,6 +485,11 @@ impl MeshProcessor {
                                     let r2 = sphere[3] * sphere[3];
                                     if dx * dx + dy * dy + dz * dz <= r2 {
                                         phase = 1;
+                                    }
+                                }
+                                if let Some(spacing) = concentric_phases {
+                                    if is_inside {
+                                        phase = ((-sdf / spacing as f32).floor() as u32) % 2 + 1;
                                     }
                                 }
                                 local_particles.push(ParticleData {
@@ -466,7 +539,7 @@ mod tests {
         };
 
         let check_err = |res: f64| {
-            let err = processor.voxelize(res, false, None, None).unwrap_err();
+            let err = processor.voxelize(res, false, None, None, None, None).unwrap_err();
             assert_eq!(
                 err.to_string(),
                 format!(
@@ -482,7 +555,7 @@ mod tests {
         check_err(f64::NAN);
         check_err(f64::INFINITY);
 
-        assert!(processor.voxelize(0.5, false, None, None).is_ok());
+        assert!(processor.voxelize(0.5, false, None, None, None, None).is_ok());
     }
 
     #[test]
@@ -504,7 +577,7 @@ mod tests {
 
         let assert_narrow_band_error = |band: f64| {
             let err = processor
-                .voxelize(0.5, false, Some(band), None)
+                .voxelize(0.5, false, Some(band), None, None, None)
                 .unwrap_err();
             assert_eq!(
                 err.to_string(),
@@ -520,8 +593,8 @@ mod tests {
         assert_narrow_band_error(f64::INFINITY);
         assert_narrow_band_error(f64::NEG_INFINITY);
 
-        assert!(processor.voxelize(0.5, false, Some(0.0), None).is_ok());
-        assert!(processor.voxelize(0.5, false, Some(2.0), None).is_ok());
+        assert!(processor.voxelize(0.5, false, Some(0.0), None, None, None).is_ok());
+        assert!(processor.voxelize(0.5, false, Some(2.0), None, None, None).is_ok());
     }
 
     #[test]
@@ -563,7 +636,7 @@ mod tests {
             bounds_max,
         };
 
-        let particles = processor.voxelize(0.5, false, None, None).unwrap();
+        let particles = processor.voxelize(0.5, false, None, None, None, None).unwrap();
         assert_eq!(
             particles.len(),
             8,

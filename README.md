@@ -51,6 +51,14 @@ Arguments:
 
 ``` --phase-sphere ```: Specify a sphere for assigning a phase 'x,y,z,radius' (e.g., `--phase-sphere 0,0,0,5`).
 
+``` --twist ```: Procedurally twist the mesh by specifying 'angle_per_unit,axis' where axis is 0=x, 1=y, 2=z (e.g. `--twist 5,1` twists 5 degrees per unit height along the Y axis).
+
+``` --wave ```: Procedurally apply a sinusoidal displacement by specifying 'amplitude,frequency,axis' (e.g. `--wave 2.0,0.5,1`).
+
+``` --hollow-thickness ```: Discards solid voxels whose SDF depth is greater than the specified thickness, essentially hollowing out the mesh.
+
+``` --concentric-phases ```: Procedurally generates repeating phase layers based on SDF distance with the given spacing (e.g., `--concentric-phases 2.0`).
+
 ``` --threads ```: Number of parallel threads to use. Defaults to the system's logical core count.
 
 ## Binary Format Specification
