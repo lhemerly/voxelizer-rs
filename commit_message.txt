@@ -1,0 +1,6 @@
+⚡ Bolt: [performance improvement] Bypass BVH query for discarded exterior voxels
+
+💡 What: Bypassed the expensive `self.mesh.distance_to_local_point()` call for exterior voxels in solid voxelization mode when `narrow_band` is `None`.
+🎯 Why: In strict solid voxelization mode (`surface_only = false`) without a narrow band, we only retain voxels with `sdf <= 0.0`. For voxels determined to be outside the mesh (`!is_inside`), computing the exact SDF distance via the BVH is unnecessary and expensive, since any positive distance will be discarded anyway. We simply assign them a dummy SDF value of `1.0` to correctly fail the keep filter, safely avoiding the BVH query entirely. Crucially, this optimization is correctly restricted to solid voxelization and avoids corrupting surface voxel data where distance is always required.
+📊 Impact: Guarantees fewer expensive BVH queries for exterior points on complex meshes. On the simple `cube.obj` benchmark, performance overhead is within noise thresholds, but structural reduction in BVH traversals ensures scalability on large exterior shells.
+🔬 Measurement: Run `cargo bench` to verify performance characteristics, and `cargo test` (including `test_sdf_invariants`) to ensure SDF data for kept voxels remains correct.
