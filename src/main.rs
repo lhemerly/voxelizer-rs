@@ -40,6 +40,12 @@ struct Args {
     #[arg(long)]
     vertex_noise: Option<f64>,
 
+    #[arg(long)]
+    twist: Option<f64>,
+
+    #[arg(long, value_parser = parse_vec3)]
+    wave: Option<[f64; 3]>,
+
     #[arg(long, value_parser = parse_vec4)]
     phase_sphere: Option<[f64; 4]>,
 
@@ -155,6 +161,8 @@ fn main() -> anyhow::Result<()> {
         rotate: args.rotate,
         crop: args.crop,
         vertex_noise: args.vertex_noise,
+        twist: args.twist,
+        wave: args.wave,
     };
 
     let processor = MeshProcessor::from_file(&args.input, &transform)?;
