@@ -37,6 +37,8 @@ pub struct TransformConfig {
     pub rotate: Option<[f64; 3]>,  // x, y, z in degrees
     pub crop: Option<[f64; 6]>,    // min_x, min_y, min_z, max_x, max_y, max_z
     pub vertex_noise: Option<f64>, // random displacement amplitude
+    pub twist: Option<f64>,        // twist factor along Z-axis in degrees
+    pub wave: Option<[f64; 3]>,    // wave effect on Y-axis based on X-axis (amplitude, frequency, phase)
 }
 
 impl Default for TransformConfig {
@@ -48,6 +50,8 @@ impl Default for TransformConfig {
             rotate: None,
             crop: None,
             vertex_noise: None,
+            twist: None,
+            wave: None,
         }
     }
 }
@@ -142,6 +146,32 @@ impl MeshProcessor {
                     p.x += rx * amp;
                     p.y += ry * amp;
                     p.z += rz * amp;
+                }
+            }
+        }
+
+        if let Some(twist) = transform.twist {
+            if twist != 0.0 {
+                let twist_rad_per_unit = twist.to_radians();
+                for p in &mut points {
+                    let angle = p.z * twist_rad_per_unit;
+                    let cos_a = angle.cos();
+                    let sin_a = angle.sin();
+                    let new_x = p.x * cos_a - p.y * sin_a;
+                    let new_y = p.x * sin_a + p.y * cos_a;
+                    p.x = new_x;
+                    p.y = new_y;
+                }
+            }
+        }
+
+        if let Some(wave) = transform.wave {
+            let amplitude = wave[0];
+            let frequency = wave[1];
+            let phase = wave[2];
+            if amplitude != 0.0 {
+                for p in &mut points {
+                    p.y += amplitude * (frequency * p.x + phase).sin();
                 }
             }
         }
@@ -785,6 +815,75 @@ mod tests {
         // The point (1,0,0) rotated 90 degrees around Z should become (0,1,0)
         assert!((processor.bounds_min.x - 0.0).abs() < 1e-5);
         assert!((processor.bounds_max.y - 1.0).abs() < 1e-5);
+
+        std::fs::remove_file(file_path).unwrap();
+    }
+
+    #[test]
+    fn test_transform_twist() {
+        let temp_dir = std::env::temp_dir();
+        let file_path = temp_dir.join(format!(
+            "test_twist_{}.stl",
+            std::time::UNIX_EPOCH.elapsed().unwrap().as_nanos()
+        ));
+
+        let faces = vec![[1.0, 0.0, 1.0], [1.0, 0.0, 1.0], [1.0, 0.0, 1.0]];
+
+        let mut f = std::fs::File::create(&file_path).unwrap();
+        use std::io::Write;
+        f.write_all(&[0; 80]).unwrap();
+        f.write_all(&1u32.to_le_bytes()).unwrap();
+        f.write_all(&[0; 12]).unwrap();
+        for v in &faces {
+            for c in v {
+                f.write_all(&(*c as f32).to_le_bytes()).unwrap();
+            }
+        }
+        f.write_all(&[0; 2]).unwrap();
+
+        let config = TransformConfig {
+            twist: Some(90.0),
+            ..Default::default()
+        };
+
+        let processor = MeshProcessor::from_file(file_path.to_str().unwrap(), &config).unwrap();
+
+        assert!((processor.bounds_min.x - 0.0).abs() < 1e-5);
+        assert!((processor.bounds_max.y - 1.0).abs() < 1e-5);
+
+        std::fs::remove_file(file_path).unwrap();
+    }
+
+    #[test]
+    fn test_transform_wave() {
+        let temp_dir = std::env::temp_dir();
+        let file_path = temp_dir.join(format!(
+            "test_wave_{}.stl",
+            std::time::UNIX_EPOCH.elapsed().unwrap().as_nanos()
+        ));
+
+        let faces = vec![[std::f64::consts::PI / 2.0, 0.0, 0.0], [std::f64::consts::PI / 2.0, 0.0, 0.0], [std::f64::consts::PI / 2.0, 0.0, 0.0]];
+
+        let mut f = std::fs::File::create(&file_path).unwrap();
+        use std::io::Write;
+        f.write_all(&[0; 80]).unwrap();
+        f.write_all(&1u32.to_le_bytes()).unwrap();
+        f.write_all(&[0; 12]).unwrap();
+        for v in &faces {
+            for c in v {
+                f.write_all(&(*c as f32).to_le_bytes()).unwrap();
+            }
+        }
+        f.write_all(&[0; 2]).unwrap();
+
+        let config = TransformConfig {
+            wave: Some([5.0, 1.0, 0.0]),
+            ..Default::default()
+        };
+
+        let processor = MeshProcessor::from_file(file_path.to_str().unwrap(), &config).unwrap();
+
+        assert!((processor.bounds_min.y - 5.0).abs() < 1e-5);
 
         std::fs::remove_file(file_path).unwrap();
     }
