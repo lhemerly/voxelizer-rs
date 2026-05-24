@@ -296,15 +296,26 @@ impl MeshProcessor {
             nx * ny * nz
         );
 
+        let base_x = bounds_min.x + resolution * 0.5;
+
         // We avoid collecting the entire yz cartesian product to save memory.
         // Instead we can use rayon's `into_par_iter` on a range or use flat_map across the ranges.
         let particles: Vec<ParticleData> = (0..ny)
             .into_par_iter()
             .flat_map(|iy| {
+                let y = bounds_min.y + (iy as f64 * resolution) + (resolution * 0.5);
                 (0..nz).into_par_iter().flat_map(move |iz| {
                     let mut local_particles = Vec::with_capacity(nx as usize);
-                    let y = bounds_min.y + (iy as f64 * resolution) + (resolution * 0.5);
                     let z = bounds_min.z + (iz as f64 * resolution) + (resolution * 0.5);
+
+                    // Precompute invariant parts of phase_sphere check
+                    let sphere_info = phase_sphere.map(|sphere| {
+                        let dy = y - sphere[1];
+                        let dz = z - sphere[2];
+                        let dist_yz = dy * dy + dz * dz;
+                        let r2 = sphere[3] * sphere[3];
+                        (sphere[0], dist_yz, r2)
+                    });
 
                     // Extract raycasting to be available for both modes so SDF sign is consistent.
                     let start_x = self.bounds_min.x - 1.0;
@@ -313,7 +324,7 @@ impl MeshProcessor {
                     let mut current_ray = ray;
                     let max_dist = (bounds_max.x.max(self.bounds_max.x) - start_x) + 1.0;
 
-                    let mut hit_xs = Vec::new();
+                    let mut hit_xs = Vec::with_capacity(8);
                     while let Some(hit_toi) = self.mesh.cast_local_ray(&current_ray, max_dist, true)
                     {
                         let hit_point = current_ray.point_at(hit_toi);
@@ -329,6 +340,9 @@ impl MeshProcessor {
                     // Sort intersections just in case precision issues caused out-of-order results
                     hit_xs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
 
+                    let mut hit_idx = 0;
+                    let hit_len = hit_xs.len();
+
                     // Iterate over X in the inner loop to optimize spatial cache locality.
                     // Because rays are cast along the +X direction, doing X sequentially
                     // keeps the raycast traversals in the same BVH region,
@@ -339,15 +353,19 @@ impl MeshProcessor {
                         let mesh_iso = Isometry::identity();
 
                         for ix in 0..nx {
-                            let x = bounds_min.x + (ix as f64 * resolution) + (resolution * 0.5);
+                            let x = base_x + (ix as f64 * resolution);
+
+                            while hit_idx < hit_len && hit_xs[hit_idx] <= x {
+                                hit_idx += 1;
+                            }
+
                             let point = Point::new(x, y, z);
                             let voxel_iso = Isometry::translation(point.x, point.y, point.z);
 
                             if let Ok(true) =
                                 intersection_test(&mesh_iso, &self.mesh, &voxel_iso, &cuboid)
                             {
-                                let intersections_to_right =
-                                    hit_xs.len() - hit_xs.partition_point(|&hx| hx <= x);
+                                let intersections_to_right = hit_len - hit_idx;
                                 let is_inside = intersections_to_right % 2 != 0;
 
                                 let distance =
@@ -364,12 +382,9 @@ impl MeshProcessor {
 
                                 if keep {
                                     let mut phase = 0;
-                                    if let Some(sphere) = phase_sphere {
-                                        let dx = x - sphere[0];
-                                        let dy = y - sphere[1];
-                                        let dz = z - sphere[2];
-                                        let r2 = sphere[3] * sphere[3];
-                                        if dx * dx + dy * dy + dz * dz <= r2 {
+                                    if let Some((sx, dist_yz, r2)) = sphere_info {
+                                        let dx = x - sx;
+                                        if dx * dx + dist_yz <= r2 {
                                             phase = 1;
                                         }
                                     }
@@ -388,34 +403,40 @@ impl MeshProcessor {
                         }
                     } else {
                         for ix in 0..nx {
-                            let x = bounds_min.x + (ix as f64 * resolution) + (resolution * 0.5);
+                            let x = base_x + (ix as f64 * resolution);
                             let point_3d = Point::new(x, y, z);
 
-                            // A point is inside if it has an odd number of intersections to its right (or left).
-                            // hit_xs is sorted, so we can use partition_point for O(log N) lookup.
-                            let intersections_to_right =
-                                hit_xs.len() - hit_xs.partition_point(|&hx| hx <= x);
+                            while hit_idx < hit_len && hit_xs[hit_idx] <= x {
+                                hit_idx += 1;
+                            }
 
+                            // A point is inside if it has an odd number of intersections to its right (or left).
+                            let intersections_to_right = hit_len - hit_idx;
                             let is_inside = intersections_to_right % 2 != 0;
 
-                            let distance =
-                                self.mesh.distance_to_local_point(&point_3d, false) as f32;
-                            let sdf = if is_inside { -distance } else { distance };
+                            let keep;
+                            let sdf;
 
-                            let keep = if let Some(band) = narrow_band {
-                                sdf.abs() <= band as f32
+                            if !is_inside && narrow_band.is_none() {
+                                sdf = 1.0;
+                                keep = false;
                             } else {
-                                sdf <= 0.0
-                            };
+                                let distance =
+                                    self.mesh.distance_to_local_point(&point_3d, false) as f32;
+                                sdf = if is_inside { -distance } else { distance };
+
+                                keep = if let Some(band) = narrow_band {
+                                    sdf.abs() <= band as f32
+                                } else {
+                                    sdf <= 0.0
+                                };
+                            }
 
                             if keep {
                                 let mut phase = 0;
-                                if let Some(sphere) = phase_sphere {
-                                    let dx = x - sphere[0];
-                                    let dy = y - sphere[1];
-                                    let dz = z - sphere[2];
-                                    let r2 = sphere[3] * sphere[3];
-                                    if dx * dx + dy * dy + dz * dz <= r2 {
+                                if let Some((sx, dist_yz, r2)) = sphere_info {
+                                    let dx = x - sx;
+                                    if dx * dx + dist_yz <= r2 {
                                         phase = 1;
                                     }
                                 }
