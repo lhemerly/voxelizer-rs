@@ -37,6 +37,9 @@ pub struct TransformConfig {
     pub rotate: Option<[f64; 3]>,  // x, y, z in degrees
     pub crop: Option<[f64; 6]>,    // min_x, min_y, min_z, max_x, max_y, max_z
     pub vertex_noise: Option<f64>, // random displacement amplitude
+    pub twist: Option<f64>,
+    pub taper: Option<f64>,
+    pub bend: Option<f64>,
 }
 
 impl Default for TransformConfig {
@@ -48,6 +51,9 @@ impl Default for TransformConfig {
             rotate: None,
             crop: None,
             vertex_noise: None,
+            twist: None,
+            taper: None,
+            bend: None,
         }
     }
 }
@@ -123,6 +129,38 @@ impl MeshProcessor {
                 p.x += t[0];
                 p.y += t[1];
                 p.z += t[2];
+            }
+        }
+
+        if let Some(twist) = transform.twist {
+            if twist.abs() > 1e-6 {
+                let twist_rad = twist.to_radians();
+                for p in &mut points {
+                    let angle = p.y * twist_rad;
+                    let cos_a = angle.cos();
+                    let sin_a = angle.sin();
+                    let px = p.x;
+                    let pz = p.z;
+                    p.x = px * cos_a - pz * sin_a;
+                    p.z = px * sin_a + pz * cos_a;
+                }
+            }
+        }
+
+        if let Some(taper) = transform.taper {
+            for p in &mut points {
+                let scale = 1.0 + p.y * taper;
+                p.x *= scale;
+                p.z *= scale;
+            }
+        }
+
+        if let Some(bend) = transform.bend {
+            if bend.abs() > 1e-6 {
+                for p in &mut points {
+                    let offset = (p.y * std::f64::consts::PI).sin() * bend;
+                    p.x += offset;
+                }
             }
         }
 

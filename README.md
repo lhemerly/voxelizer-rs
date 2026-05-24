@@ -9,7 +9,7 @@ Uses rayon for multi-threaded ray-casting and grid search.
 
 ### Robust: Handles both .stl (binary/ascii) and .obj formats.
 
-### Multi-format Export: Outputs to PLY, CSV, VTK, OBJ, MagicaVoxel (.vox), or a compact binary (.bin) format depending on the file extension.
+### Multi-format Export: Outputs to PLY, CSV, VTK, OBJ, XYZ, MagicaVoxel (.vox), or a compact binary (.bin) format depending on the file extension.
 
 ### Surface and Solid Modes: Generate either a solid voxelized volume, or just a thin surface shell.
 
@@ -48,6 +48,14 @@ Arguments:
 ``` --crop ```: Crops the mesh to the given bounding box 'min_x,min_y,min_z,max_x,max_y,max_z' (e.g., `--crop -10,-10,-10,10,10,10`).
 
 ``` --vertex-noise ```: Adds random displacement noise with the specified amplitude.
+
+``` --twist ```: Twists the mesh around the Y-axis by the given degrees per unit length.
+
+``` --taper ```: Tapers the mesh along the Y-axis with the given scale factor.
+
+``` --bend ```: Bends the mesh along the X-axis based on the Y-coordinate with the given amplitude.
+
+``` --color-gradient ```: Applies a color gradient to PLY and VOX exports based on an axis ('x', 'y', 'z', or 'sdf').
 
 ``` --phase-sphere ```: Specify a sphere for assigning a phase 'x,y,z,radius' (e.g., `--phase-sphere 0,0,0,5`).
 
