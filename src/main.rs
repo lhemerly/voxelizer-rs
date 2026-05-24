@@ -40,11 +40,23 @@ struct Args {
     #[arg(long)]
     vertex_noise: Option<f64>,
 
+    #[arg(long)]
+    twist: Option<f64>,
+
+    #[arg(long)]
+    taper: Option<f64>,
+
+    #[arg(long)]
+    bend: Option<f64>,
+
     #[arg(long, value_parser = parse_vec4)]
     phase_sphere: Option<[f64; 4]>,
 
     #[arg(long)]
     threads: Option<usize>,
+
+    #[arg(long)]
+    color_gradient: Option<String>,
 }
 
 fn parse_vec4(s: &str) -> Result<[f64; 4], String> {
@@ -124,6 +136,32 @@ fn validate_resolution(s: &str) -> Result<f64, String> {
     }
 }
 
+fn hsv_to_rgb(h: f32, s: f32, v: f32) -> [u8; 3] {
+    let c = v * s;
+    let x = c * (1.0 - ((h / 60.0) % 2.0 - 1.0).abs());
+    let m = v - c;
+
+    let (r_prime, g_prime, b_prime) = if h < 60.0 {
+        (c, x, 0.0)
+    } else if h < 120.0 {
+        (x, c, 0.0)
+    } else if h < 180.0 {
+        (0.0, c, x)
+    } else if h < 240.0 {
+        (0.0, x, c)
+    } else if h < 300.0 {
+        (x, 0.0, c)
+    } else {
+        (c, 0.0, x)
+    };
+
+    [
+        ((r_prime + m) * 255.0).round() as u8,
+        ((g_prime + m) * 255.0).round() as u8,
+        ((b_prime + m) * 255.0).round() as u8,
+    ]
+}
+
 fn validate_narrow_band(s: &str) -> Result<f64, String> {
     let val: f64 = s.parse().map_err(|_| format!("`{s}` isn't a number"))?;
     if val.is_finite() && val >= 0.0 {
@@ -155,6 +193,9 @@ fn main() -> anyhow::Result<()> {
         rotate: args.rotate,
         crop: args.crop,
         vertex_noise: args.vertex_noise,
+        twist: args.twist,
+        taper: args.taper,
+        bend: args.bend,
     };
 
     let processor = MeshProcessor::from_file(&args.input, &transform)?;
@@ -190,9 +231,54 @@ fn main() -> anyhow::Result<()> {
             writeln!(writer, "property float x")?;
             writeln!(writer, "property float y")?;
             writeln!(writer, "property float z")?;
+            if args.color_gradient.is_some() {
+                writeln!(writer, "property uchar red")?;
+                writeln!(writer, "property uchar green")?;
+                writeln!(writer, "property uchar blue")?;
+            }
             writeln!(writer, "end_header")?;
+
+            let mut min_val = f32::MAX;
+            let mut max_val = f32::MIN;
+
+            if let Some(axis) = &args.color_gradient {
+                for p in &particles {
+                    let val = match axis.as_str() {
+                        "x" => p.x,
+                        "y" => p.y,
+                        "z" => p.z,
+                        "sdf" => p.sdf,
+                        _ => p.y,
+                    };
+                    min_val = min_val.min(val);
+                    max_val = max_val.max(val);
+                }
+            }
+
             for p in &particles {
-                writeln!(writer, "{} {} {}", p.x, p.y, p.z)?;
+                if let Some(axis) = &args.color_gradient {
+                    let val = match axis.as_str() {
+                        "x" => p.x,
+                        "y" => p.y,
+                        "z" => p.z,
+                        "sdf" => p.sdf,
+                        _ => p.y,
+                    };
+                    let t = if max_val > min_val {
+                        (val - min_val) / (max_val - min_val)
+                    } else {
+                        0.0
+                    };
+                    let hue = t * 240.0; // 0 (red) to 240 (blue)
+                    let rgb = hsv_to_rgb(hue, 1.0, 1.0);
+                    writeln!(
+                        writer,
+                        "{} {} {} {} {} {}",
+                        p.x, p.y, p.z, rgb[0], rgb[1], rgb[2]
+                    )?;
+                } else {
+                    writeln!(writer, "{} {} {}", p.x, p.y, p.z)?;
+                }
             }
         }
         Some("vtk") => {
@@ -270,8 +356,28 @@ fn main() -> anyhow::Result<()> {
             // MAIN chunk
             writer.write_all(b"MAIN")?;
             writer.write_all(&0u32.to_le_bytes())?;
-            // Size of children: SIZE chunk (24) + XYZI chunk (16 + 4 * num_voxels)
-            let children_size = 24 + 16 + num_voxels * 4;
+            let mut min_val = f32::MAX;
+            let mut max_val = f32::MIN;
+            if let Some(axis) = &args.color_gradient {
+                for p in &particles {
+                    let val = match axis.as_str() {
+                        "x" => p.x,
+                        "y" => p.y,
+                        "z" => p.z,
+                        "sdf" => p.sdf,
+                        _ => p.y,
+                    };
+                    min_val = min_val.min(val);
+                    max_val = max_val.max(val);
+                }
+            }
+
+            let has_palette = args.color_gradient.is_some();
+            // Size of children: SIZE chunk (24) + XYZI chunk (16 + 4 * num_voxels) + optional RGBA chunk (12 + 1024)
+            let mut children_size = 24 + 16 + num_voxels * 4;
+            if has_palette {
+                children_size += 12 + 1024;
+            }
             writer.write_all(&children_size.to_le_bytes())?;
 
             // SIZE chunk
@@ -299,13 +405,49 @@ fn main() -> anyhow::Result<()> {
                 vy = vy.clamp(0, 255);
                 vz = vz.clamp(0, 255);
 
-                let color_idx = if p.phase > 0 { 2u8 } else { 1u8 };
+                let mut color_idx = if p.phase > 0 { 2u8 } else { 1u8 };
+
+                if let Some(axis) = &args.color_gradient {
+                    let val = match axis.as_str() {
+                        "x" => p.x,
+                        "y" => p.y,
+                        "z" => p.z,
+                        "sdf" => p.sdf,
+                        _ => p.y,
+                    };
+                    let t = if max_val > min_val {
+                        (val - min_val) / (max_val - min_val)
+                    } else {
+                        0.0
+                    };
+                    // Map t to [1, 255]
+                    color_idx = (1.0 + t * 254.0).round().clamp(1.0, 255.0) as u8;
+                }
+
                 writer.write_all(&[vx as u8, vy as u8, vz as u8, color_idx])?;
+            }
+
+            if has_palette {
+                writer.write_all(b"RGBA")?;
+                writer.write_all(&1024u32.to_le_bytes())?;
+                writer.write_all(&0u32.to_le_bytes())?;
+
+                for i in 1..=256 {
+                    let t = (i as f32 - 1.0) / 254.0;
+                    let hue = t.clamp(0.0, 1.0) * 240.0;
+                    let rgb = hsv_to_rgb(hue, 1.0, 1.0);
+                    writer.write_all(&[rgb[0], rgb[1], rgb[2], 255])?;
+                }
             }
         }
         Some("obj") => {
             for p in &particles {
                 writeln!(writer, "v {} {} {}", p.x, p.y, p.z)?;
+            }
+        }
+        Some("xyz") => {
+            for p in &particles {
+                writeln!(writer, "{} {} {}", p.x, p.y, p.z)?;
             }
         }
         _ => {
