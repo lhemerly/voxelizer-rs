@@ -2,7 +2,7 @@ use clap::Parser;
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::Path;
-use voxelizer_rs::{MeshProcessor, ParticleHeader, TransformConfig};
+use voxelizer_rs::{LatticeConfig, LatticeType, MeshProcessor, ParticleHeader, TransformConfig};
 
 #[derive(Parser, Debug)]
 #[command(author, version, about = "Voxelizer")]
@@ -45,6 +45,21 @@ struct Args {
 
     #[arg(long)]
     threads: Option<usize>,
+
+    #[arg(long)]
+    twist: Option<f64>,
+
+    #[arg(long)]
+    lattice: Option<String>,
+
+    #[arg(long, default_value_t = 1.0)]
+    lattice_scale: f64,
+
+    #[arg(long, default_value_t = 0.1)]
+    lattice_thickness: f64,
+
+    #[arg(long)]
+    color_height: bool,
 }
 
 fn parse_vec4(s: &str) -> Result<[f64; 4], String> {
@@ -155,15 +170,55 @@ fn main() -> anyhow::Result<()> {
         rotate: args.rotate,
         crop: args.crop,
         vertex_noise: args.vertex_noise,
+        twist: args.twist,
     };
 
+    let lattice_config = args.lattice.as_ref().map(|s| {
+        let ltype = match s.to_lowercase().as_str() {
+            "gyroid" => LatticeType::Gyroid,
+            "schwarz" | "schwarzp" => LatticeType::SchwarzP,
+            "diamond" => LatticeType::Diamond,
+            _ => {
+                eprintln!("Unknown lattice type '{}', defaulting to Gyroid", s);
+                LatticeType::Gyroid
+            }
+        };
+        LatticeConfig {
+            lattice_type: ltype,
+            scale: args.lattice_scale,
+            thickness: args.lattice_thickness,
+        }
+    });
+
     let processor = MeshProcessor::from_file(&args.input, &transform)?;
-    let particles = processor.voxelize(
+    let mut particles = processor.voxelize(
         args.resolution,
         args.surface_only,
         args.narrow_band,
         args.phase_sphere,
+        lattice_config.as_ref(),
     )?;
+
+    if args.color_height && !particles.is_empty() {
+        let mut min_y = f32::MAX;
+        let mut max_y = f32::MIN;
+        for p in &particles {
+            if p.y < min_y {
+                min_y = p.y;
+            }
+            if p.y > max_y {
+                max_y = p.y;
+            }
+        }
+        let range = max_y - min_y;
+        if range > 1e-6 {
+            for p in &mut particles {
+                let norm = (p.y - min_y) / range;
+                // Map to 1-255 (0 is usually reserved/empty)
+                p.phase = 1 + (norm * 254.0) as u32;
+            }
+        }
+    }
 
     println!("Generated {} particles.", particles.len());
 

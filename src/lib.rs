@@ -8,6 +8,20 @@ use serde::{Deserialize, Serialize};
 use std::fs::File;
 use std::path::Path;
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum LatticeType {
+    Gyroid,
+    SchwarzP,
+    Diamond,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct LatticeConfig {
+    pub lattice_type: LatticeType,
+    pub scale: f64,
+    pub thickness: f64,
+}
+
 #[derive(Serialize, Deserialize, Debug)]
 pub struct ParticleHeader {
     pub version: u32,
@@ -37,6 +51,7 @@ pub struct TransformConfig {
     pub rotate: Option<[f64; 3]>,  // x, y, z in degrees
     pub crop: Option<[f64; 6]>,    // min_x, min_y, min_z, max_x, max_y, max_z
     pub vertex_noise: Option<f64>, // random displacement amplitude
+    pub twist: Option<f64>,
 }
 
 impl Default for TransformConfig {
@@ -48,6 +63,7 @@ impl Default for TransformConfig {
             rotate: None,
             crop: None,
             vertex_noise: None,
+            twist: None,
         }
     }
 }
@@ -142,6 +158,20 @@ impl MeshProcessor {
                     p.x += rx * amp;
                     p.y += ry * amp;
                     p.z += rz * amp;
+                }
+            }
+        }
+
+        if let Some(twist) = transform.twist {
+            if twist.abs() > f64::EPSILON {
+                for p in &mut points {
+                    let angle = p.y * twist;
+                    let cos_a = angle.cos();
+                    let sin_a = angle.sin();
+                    let x_new = p.x * cos_a - p.z * sin_a;
+                    let z_new = p.x * sin_a + p.z * cos_a;
+                    p.x = x_new;
+                    p.z = z_new;
                 }
             }
         }
@@ -252,6 +282,7 @@ impl MeshProcessor {
         surface_only: bool,
         narrow_band: Option<f64>,
         phase_sphere: Option<[f64; 4]>,
+        lattice: Option<&LatticeConfig>,
     ) -> Result<Vec<ParticleData>> {
         if !resolution.is_finite() || resolution <= 1e-6 {
             anyhow::bail!(
@@ -356,11 +387,27 @@ impl MeshProcessor {
 
                                 // Surface voxels inherently intersect the surface, so they should always be kept
                                 // if we're not using narrow_band. If narrow_band is used, we check the distance.
-                                let keep = if let Some(band) = narrow_band {
+                                let mut keep = if let Some(band) = narrow_band {
                                     sdf.abs() <= band as f32
                                 } else {
                                     true
                                 };
+
+                                if keep {
+                                    if let Some(lat) = lattice {
+                                        let sx = x * lat.scale;
+                                        let sy = y * lat.scale;
+                                        let sz = z * lat.scale;
+                                        let val = match lat.lattice_type {
+                                            LatticeType::Gyroid => sx.sin() * sy.cos() + sy.sin() * sz.cos() + sz.sin() * sx.cos(),
+                                            LatticeType::SchwarzP => sx.cos() + sy.cos() + sz.cos(),
+                                            LatticeType::Diamond => sx.sin() * sy.sin() * sz.sin() + sx.sin() * sy.cos() * sz.cos() + sx.cos() * sy.sin() * sz.cos() + sx.cos() * sy.cos() * sz.sin(),
+                                        };
+                                        if val.abs() > lat.thickness {
+                                            keep = false;
+                                        }
+                                    }
+                                }
 
                                 if keep {
                                     let mut phase = 0;
@@ -402,11 +449,27 @@ impl MeshProcessor {
                                 self.mesh.distance_to_local_point(&point_3d, false) as f32;
                             let sdf = if is_inside { -distance } else { distance };
 
-                            let keep = if let Some(band) = narrow_band {
+                            let mut keep = if let Some(band) = narrow_band {
                                 sdf.abs() <= band as f32
                             } else {
                                 sdf <= 0.0
                             };
+
+                            if keep {
+                                if let Some(lat) = lattice {
+                                    let sx = x * lat.scale;
+                                    let sy = y * lat.scale;
+                                    let sz = z * lat.scale;
+                                    let val = match lat.lattice_type {
+                                        LatticeType::Gyroid => sx.sin() * sy.cos() + sy.sin() * sz.cos() + sz.sin() * sx.cos(),
+                                        LatticeType::SchwarzP => sx.cos() + sy.cos() + sz.cos(),
+                                        LatticeType::Diamond => sx.sin() * sy.sin() * sz.sin() + sx.sin() * sy.cos() * sz.cos() + sx.cos() * sy.sin() * sz.cos() + sx.cos() * sy.cos() * sz.sin(),
+                                    };
+                                    if val.abs() > lat.thickness {
+                                        keep = false;
+                                    }
+                                }
+                            }
 
                             if keep {
                                 let mut phase = 0;
@@ -466,7 +529,7 @@ mod tests {
         };
 
         let check_err = |res: f64| {
-            let err = processor.voxelize(res, false, None, None).unwrap_err();
+            let err = processor.voxelize(res, false, None, None, None).unwrap_err();
             assert_eq!(
                 err.to_string(),
                 format!(
@@ -482,7 +545,7 @@ mod tests {
         check_err(f64::NAN);
         check_err(f64::INFINITY);
 
-        assert!(processor.voxelize(0.5, false, None, None).is_ok());
+        assert!(processor.voxelize(0.5, false, None, None, None).is_ok());
     }
 
     #[test]
@@ -504,7 +567,7 @@ mod tests {
 
         let assert_narrow_band_error = |band: f64| {
             let err = processor
-                .voxelize(0.5, false, Some(band), None)
+                .voxelize(0.5, false, Some(band), None, None)
                 .unwrap_err();
             assert_eq!(
                 err.to_string(),
@@ -520,8 +583,8 @@ mod tests {
         assert_narrow_band_error(f64::INFINITY);
         assert_narrow_band_error(f64::NEG_INFINITY);
 
-        assert!(processor.voxelize(0.5, false, Some(0.0), None).is_ok());
-        assert!(processor.voxelize(0.5, false, Some(2.0), None).is_ok());
+        assert!(processor.voxelize(0.5, false, Some(0.0), None, None).is_ok());
+        assert!(processor.voxelize(0.5, false, Some(2.0), None, None).is_ok());
     }
 
     #[test]
@@ -563,7 +626,7 @@ mod tests {
             bounds_max,
         };
 
-        let particles = processor.voxelize(0.5, false, None, None).unwrap();
+        let particles = processor.voxelize(0.5, false, None, None, None).unwrap();
         assert_eq!(
             particles.len(),
             8,
