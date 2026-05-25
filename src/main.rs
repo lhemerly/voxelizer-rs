@@ -7,42 +7,55 @@ use voxelizer_rs::{MeshProcessor, ParticleHeader, TransformConfig};
 #[derive(Parser, Debug)]
 #[command(author, version, about = "Voxelizer")]
 struct Args {
+    /// Path to source mesh
     #[arg(short, long)]
     input: String,
 
+    /// Path to destination file
     #[arg(short, long)]
     output: String,
 
+    /// Voxel size in mesh units
     #[arg(short, long, default_value_t = 0.5, value_parser = validate_resolution)]
     resolution: f64,
 
+    /// If provided, the output will only contain surface voxels instead of solid filling
     #[arg(long)]
     surface_only: bool,
 
+    /// Evaluate and store only the voxels where the absolute distance is within the desired threshold
     #[arg(long, value_parser = validate_narrow_band)]
     narrow_band: Option<f64>,
 
+    /// Scale multiplier for the mesh dimensions
     #[arg(long, default_value_t = 1.0)]
     scale: f64,
 
+    /// If provided, the mesh will be centered at the origin (0, 0, 0) before processing
     #[arg(long)]
     center: bool,
 
+    /// Translates the mesh by 'x,y,z' offsets
     #[arg(long, value_parser = parse_vec3)]
     translate: Option<[f64; 3]>,
 
+    /// Rotates the mesh by 'x,y,z' degrees
     #[arg(long, value_parser = parse_vec3)]
     rotate: Option<[f64; 3]>,
 
+    /// Crops the mesh to the given bounding box 'min_x,min_y,min_z,max_x,max_y,max_z'
     #[arg(long, value_parser = parse_vec6)]
     crop: Option<[f64; 6]>,
 
+    /// Adds random displacement noise with the specified amplitude
     #[arg(long)]
     vertex_noise: Option<f64>,
 
+    /// Specify a sphere for assigning a phase 'x,y,z,radius'
     #[arg(long, value_parser = parse_vec4)]
     phase_sphere: Option<[f64; 4]>,
 
+    /// Number of parallel threads to use
     #[arg(long)]
     threads: Option<usize>,
 }
