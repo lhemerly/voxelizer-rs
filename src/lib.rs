@@ -398,15 +398,25 @@ impl MeshProcessor {
 
                             let is_inside = intersections_to_right % 2 != 0;
 
-                            let distance =
-                                self.mesh.distance_to_local_point(&point_3d, false) as f32;
-                            let sdf = if is_inside { -distance } else { distance };
+                            let sdf;
+                            let keep;
 
-                            let keep = if let Some(band) = narrow_band {
-                                sdf.abs() <= band as f32
+                            if narrow_band.is_none() && !is_inside {
+                                // Fast path: skip expensive BVH distance query for exterior voxels
+                                // when narrow_band is not used, since they are immediately discarded anyway.
+                                sdf = 1.0;
+                                keep = false;
                             } else {
-                                sdf <= 0.0
-                            };
+                                let distance =
+                                    self.mesh.distance_to_local_point(&point_3d, false) as f32;
+                                sdf = if is_inside { -distance } else { distance };
+
+                                keep = if let Some(band) = narrow_band {
+                                    sdf.abs() <= band as f32
+                                } else {
+                                    sdf <= 0.0
+                                };
+                            }
 
                             if keep {
                                 let mut phase = 0;
