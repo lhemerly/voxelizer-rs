@@ -40,11 +40,34 @@ struct Args {
     #[arg(long)]
     vertex_noise: Option<f64>,
 
+    #[arg(long)]
+    twist: Option<f64>,
+
     #[arg(long, value_parser = parse_vec4)]
     phase_sphere: Option<[f64; 4]>,
 
+    #[arg(long, value_parser = parse_vec2)]
+    lattice: Option<[f64; 2]>,
+
     #[arg(long)]
     threads: Option<usize>,
+
+    #[arg(long)]
+    ascii_preview: bool,
+}
+
+fn parse_vec2(s: &str) -> Result<[f64; 2], String> {
+    let parts: Vec<&str> = s.split(',').collect();
+    if parts.len() != 2 {
+        return Err(format!("Expected 'spacing,thickness', got '{}'", s));
+    }
+    let x = parts[0]
+        .parse()
+        .map_err(|_| format!("Invalid spacing: {}", parts[0]))?;
+    let y = parts[1]
+        .parse()
+        .map_err(|_| format!("Invalid thickness: {}", parts[1]))?;
+    Ok([x, y])
 }
 
 fn parse_vec4(s: &str) -> Result<[f64; 4], String> {
@@ -155,6 +178,7 @@ fn main() -> anyhow::Result<()> {
         rotate: args.rotate,
         crop: args.crop,
         vertex_noise: args.vertex_noise,
+        twist: args.twist,
     };
 
     let processor = MeshProcessor::from_file(&args.input, &transform)?;
@@ -163,9 +187,54 @@ fn main() -> anyhow::Result<()> {
         args.surface_only,
         args.narrow_band,
         args.phase_sphere,
+        args.lattice,
     )?;
 
     println!("Generated {} particles.", particles.len());
+
+    if args.ascii_preview && !particles.is_empty() {
+        println!("\nASCII Preview (X-Z plane):");
+        let mut min_x = f32::MAX;
+        let mut max_x = f32::MIN;
+        let mut min_z = f32::MAX;
+        let mut max_z = f32::MIN;
+
+        for p in &particles {
+            min_x = min_x.min(p.x);
+            max_x = max_x.max(p.x);
+            min_z = min_z.min(p.z);
+            max_z = max_z.max(p.z);
+        }
+
+        let width = 80;
+        let height = 40;
+        let mut grid = vec![vec![' '; width]; height];
+
+        for p in &particles {
+            let px = if max_x > min_x {
+                ((p.x - min_x) / (max_x - min_x) * (width as f32 - 1.0)).round() as usize
+            } else {
+                0
+            };
+            let pz = if max_z > min_z {
+                // Invert Z so positive Z points up in terminal
+                ((max_z - p.z) / (max_z - min_z) * (height as f32 - 1.0)).round() as usize
+            } else {
+                0
+            };
+
+            // Bounds check just in case
+            if px < width && pz < height {
+                grid[pz][px] = '█';
+            }
+        }
+
+        for row in grid {
+            let s: String = row.into_iter().collect();
+            println!("{}", s);
+        }
+        println!();
+    }
 
     let path_out = Path::new(&args.output);
     let extension = path_out
