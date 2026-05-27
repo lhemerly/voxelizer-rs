@@ -45,6 +45,15 @@ struct Args {
 
     #[arg(long)]
     threads: Option<usize>,
+
+    #[arg(long)]
+    gyroid_scale: Option<f64>,
+
+    #[arg(long)]
+    gyroid_thickness: Option<f64>,
+
+    #[arg(long)]
+    height_phases: Option<u32>,
 }
 
 fn parse_vec4(s: &str) -> Result<[f64; 4], String> {
@@ -163,6 +172,9 @@ fn main() -> anyhow::Result<()> {
         args.surface_only,
         args.narrow_band,
         args.phase_sphere,
+        args.gyroid_scale,
+        args.gyroid_thickness,
+        args.height_phases,
     )?;
 
     println!("Generated {} particles.", particles.len());
@@ -299,7 +311,11 @@ fn main() -> anyhow::Result<()> {
                 vy = vy.clamp(0, 255);
                 vz = vz.clamp(0, 255);
 
-                let color_idx = if p.phase > 0 { 2u8 } else { 1u8 };
+                let color_idx = if p.phase > 0 {
+                    1 + (p.phase as u8 % 254)
+                } else {
+                    1u8
+                };
                 writer.write_all(&[vx as u8, vy as u8, vz as u8, color_idx])?;
             }
         }
