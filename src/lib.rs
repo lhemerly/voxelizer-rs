@@ -37,6 +37,7 @@ pub struct TransformConfig {
     pub rotate: Option<[f64; 3]>,  // x, y, z in degrees
     pub crop: Option<[f64; 6]>,    // min_x, min_y, min_z, max_x, max_y, max_z
     pub vertex_noise: Option<f64>, // random displacement amplitude
+    pub twist: Option<f64>,        // twist factor around z-axis
 }
 
 impl Default for TransformConfig {
@@ -48,6 +49,7 @@ impl Default for TransformConfig {
             rotate: None,
             crop: None,
             vertex_noise: None,
+            twist: None,
         }
     }
 }
@@ -123,6 +125,18 @@ impl MeshProcessor {
                 p.x += t[0];
                 p.y += t[1];
                 p.z += t[2];
+            }
+        }
+
+        if let Some(twist) = transform.twist {
+            for p in &mut points {
+                let angle = p.z * twist;
+                let cos_a = angle.cos();
+                let sin_a = angle.sin();
+                let new_x = p.x * cos_a - p.y * sin_a;
+                let new_y = p.x * sin_a + p.y * cos_a;
+                p.x = new_x;
+                p.y = new_y;
             }
         }
 
@@ -252,6 +266,7 @@ impl MeshProcessor {
         surface_only: bool,
         narrow_band: Option<f64>,
         phase_sphere: Option<[f64; 4]>,
+        gyroid_scale: Option<f64>,
     ) -> Result<Vec<ParticleData>> {
         if !resolution.is_finite() || resolution <= 1e-6 {
             anyhow::bail!(
@@ -356,11 +371,26 @@ impl MeshProcessor {
 
                                 // Surface voxels inherently intersect the surface, so they should always be kept
                                 // if we're not using narrow_band. If narrow_band is used, we check the distance.
-                                let keep = if let Some(band) = narrow_band {
+                                let mut keep = if let Some(band) = narrow_band {
                                     sdf.abs() <= band as f32
                                 } else {
                                     true
                                 };
+
+                                #[allow(clippy::collapsible_if)]
+                                if keep {
+                                    if let Some(gs) = gyroid_scale {
+                                        let gx = x / gs;
+                                        let gy = y / gs;
+                                        let gz = z / gs;
+                                        let gyroid_val = gx.sin() * gy.cos()
+                                            + gy.sin() * gz.cos()
+                                            + gz.sin() * gx.cos();
+                                        if gyroid_val <= 0.0 {
+                                            keep = false;
+                                        }
+                                    }
+                                }
 
                                 if keep {
                                     let mut phase = 0;
@@ -402,11 +432,25 @@ impl MeshProcessor {
                                 self.mesh.distance_to_local_point(&point_3d, false) as f32;
                             let sdf = if is_inside { -distance } else { distance };
 
-                            let keep = if let Some(band) = narrow_band {
+                            let mut keep = if let Some(band) = narrow_band {
                                 sdf.abs() <= band as f32
                             } else {
                                 sdf <= 0.0
                             };
+
+                            #[allow(clippy::collapsible_if)]
+                            if keep {
+                                if let Some(gs) = gyroid_scale {
+                                    let gx = x / gs;
+                                    let gy = y / gs;
+                                    let gz = z / gs;
+                                    let gyroid_val =
+                                        gx.sin() * gy.cos() + gy.sin() * gz.cos() + gz.sin() * gx.cos();
+                                    if gyroid_val <= 0.0 {
+                                        keep = false;
+                                    }
+                                }
+                            }
 
                             if keep {
                                 let mut phase = 0;
@@ -466,7 +510,9 @@ mod tests {
         };
 
         let check_err = |res: f64| {
-            let err = processor.voxelize(res, false, None, None).unwrap_err();
+            let err = processor
+                .voxelize(res, false, None, None, None)
+                .unwrap_err();
             assert_eq!(
                 err.to_string(),
                 format!(
@@ -482,7 +528,7 @@ mod tests {
         check_err(f64::NAN);
         check_err(f64::INFINITY);
 
-        assert!(processor.voxelize(0.5, false, None, None).is_ok());
+        assert!(processor.voxelize(0.5, false, None, None, None).is_ok());
     }
 
     #[test]
@@ -504,7 +550,7 @@ mod tests {
 
         let assert_narrow_band_error = |band: f64| {
             let err = processor
-                .voxelize(0.5, false, Some(band), None)
+                .voxelize(0.5, false, Some(band), None, None)
                 .unwrap_err();
             assert_eq!(
                 err.to_string(),
@@ -520,8 +566,16 @@ mod tests {
         assert_narrow_band_error(f64::INFINITY);
         assert_narrow_band_error(f64::NEG_INFINITY);
 
-        assert!(processor.voxelize(0.5, false, Some(0.0), None).is_ok());
-        assert!(processor.voxelize(0.5, false, Some(2.0), None).is_ok());
+        assert!(
+            processor
+                .voxelize(0.5, false, Some(0.0), None, None)
+                .is_ok()
+        );
+        assert!(
+            processor
+                .voxelize(0.5, false, Some(2.0), None, None)
+                .is_ok()
+        );
     }
 
     #[test]
@@ -563,7 +617,7 @@ mod tests {
             bounds_max,
         };
 
-        let particles = processor.voxelize(0.5, false, None, None).unwrap();
+        let particles = processor.voxelize(0.5, false, None, None, None).unwrap();
         assert_eq!(
             particles.len(),
             8,
@@ -751,6 +805,33 @@ mod tests {
         assert_eq!(processor.bounds_max.z, 8.0);
 
         std::fs::remove_file(file_path).unwrap();
+    }
+
+    #[test]
+    fn test_transform_twist() {
+        use std::io::Write;
+        let temp_dir = std::env::temp_dir();
+        let path = temp_dir.join(format!(
+            "test_twist_{}.stl",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let mut file = std::fs::File::create(&path).unwrap();
+        file.write_all(&[0u8; 80]).unwrap(); // header
+        file.write_all(&2u32.to_le_bytes()).unwrap(); // 2 faces
+        file.write_all(&[0u8; 50]).unwrap(); // face 1
+        file.write_all(&[0u8; 50]).unwrap(); // face 2
+        file.sync_all().unwrap();
+
+        let config = TransformConfig {
+            twist: Some(1.0),
+            ..Default::default()
+        };
+        let _processor = MeshProcessor::from_file(&path.to_string_lossy(), &config).unwrap();
+        std::fs::remove_file(path).unwrap();
+        // Just verifying it parses without panic
     }
 
     #[test]

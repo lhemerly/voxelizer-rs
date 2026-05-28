@@ -44,6 +44,12 @@ struct Args {
     phase_sphere: Option<[f64; 4]>,
 
     #[arg(long)]
+    twist: Option<f64>,
+
+    #[arg(long)]
+    gyroid_scale: Option<f64>,
+
+    #[arg(long)]
     threads: Option<usize>,
 }
 
@@ -155,6 +161,7 @@ fn main() -> anyhow::Result<()> {
         rotate: args.rotate,
         crop: args.crop,
         vertex_noise: args.vertex_noise,
+        twist: args.twist,
     };
 
     let processor = MeshProcessor::from_file(&args.input, &transform)?;
@@ -163,6 +170,7 @@ fn main() -> anyhow::Result<()> {
         args.surface_only,
         args.narrow_band,
         args.phase_sphere,
+        args.gyroid_scale,
     )?;
 
     println!("Generated {} particles.", particles.len());
