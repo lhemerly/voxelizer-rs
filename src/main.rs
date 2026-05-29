@@ -25,6 +25,9 @@ struct Args {
     #[arg(long, default_value_t = 1.0)]
     scale: f64,
 
+    #[arg(long, value_parser = parse_vec3)]
+    scale_xyz: Option<[f64; 3]>,
+
     #[arg(long)]
     center: bool,
 
@@ -44,7 +47,27 @@ struct Args {
     phase_sphere: Option<[f64; 4]>,
 
     #[arg(long)]
+    hollow: Option<f64>,
+
+    #[arg(long, value_parser = parse_vec2)]
+    gyroid: Option<[f64; 2]>,
+
+    #[arg(long)]
     threads: Option<usize>,
+}
+
+fn parse_vec2(s: &str) -> Result<[f64; 2], String> {
+    let parts: Vec<&str> = s.split(',').collect();
+    if parts.len() != 2 {
+        return Err(format!("Expected 'value1,value2', got '{}'", s));
+    }
+    let x = parts[0]
+        .parse()
+        .map_err(|_| format!("Invalid value 1: {}", parts[0]))?;
+    let y = parts[1]
+        .parse()
+        .map_err(|_| format!("Invalid value 2: {}", parts[1]))?;
+    Ok([x, y])
 }
 
 fn parse_vec4(s: &str) -> Result<[f64; 4], String> {
@@ -150,6 +173,7 @@ fn main() -> anyhow::Result<()> {
 
     let transform = TransformConfig {
         scale: args.scale,
+        scale_xyz: args.scale_xyz,
         center: args.center,
         translate: args.translate,
         rotate: args.rotate,
@@ -163,6 +187,8 @@ fn main() -> anyhow::Result<()> {
         args.surface_only,
         args.narrow_band,
         args.phase_sphere,
+        args.hollow,
+        args.gyroid,
     )?;
 
     println!("Generated {} particles.", particles.len());
