@@ -32,6 +32,7 @@ type MeshData = (Vec<Point<f64>>, Vec<[u32; 3]>);
 #[derive(Debug, Clone, Copy)]
 pub struct TransformConfig {
     pub scale: f64,
+    pub scale_xyz: Option<[f64; 3]>,
     pub center: bool,
     pub translate: Option<[f64; 3]>,
     pub rotate: Option<[f64; 3]>,  // x, y, z in degrees
@@ -43,6 +44,7 @@ impl Default for TransformConfig {
     fn default() -> Self {
         Self {
             scale: 1.0,
+            scale_xyz: None,
             center: false,
             translate: None,
             rotate: None,
@@ -115,6 +117,14 @@ impl MeshProcessor {
                 p.x *= transform.scale;
                 p.y *= transform.scale;
                 p.z *= transform.scale;
+            }
+        }
+
+        if let Some(s) = transform.scale_xyz {
+            for p in &mut points {
+                p.x *= s[0];
+                p.y *= s[1];
+                p.z *= s[2];
             }
         }
 
@@ -252,6 +262,8 @@ impl MeshProcessor {
         surface_only: bool,
         narrow_band: Option<f64>,
         phase_sphere: Option<[f64; 4]>,
+        hollow: Option<f64>,
+        gyroid: Option<[f64; 2]>,
     ) -> Result<Vec<ParticleData>> {
         if !resolution.is_finite() || resolution <= 1e-6 {
             anyhow::bail!(
@@ -356,11 +368,32 @@ impl MeshProcessor {
 
                                 // Surface voxels inherently intersect the surface, so they should always be kept
                                 // if we're not using narrow_band. If narrow_band is used, we check the distance.
-                                let keep = if let Some(band) = narrow_band {
+                                let mut keep = if let Some(band) = narrow_band {
                                     sdf.abs() <= band as f32
                                 } else {
                                     true
                                 };
+
+                                if keep
+                                    && let Some(h) = hollow
+                                        && sdf < -(h as f32) {
+                                            keep = false;
+                                        }
+
+                                if keep
+                                    && let Some(g) = gyroid {
+                                        let freq = g[0];
+                                        let thickness = g[1];
+                                        let px = x * freq;
+                                        let py = y * freq;
+                                        let pz = z * freq;
+                                        let val = px.sin() * py.cos()
+                                            + py.sin() * pz.cos()
+                                            + pz.sin() * px.cos();
+                                        if val.abs() > thickness {
+                                            keep = false;
+                                        }
+                                    }
 
                                 if keep {
                                     let mut phase = 0;
@@ -402,11 +435,32 @@ impl MeshProcessor {
                                 self.mesh.distance_to_local_point(&point_3d, false) as f32;
                             let sdf = if is_inside { -distance } else { distance };
 
-                            let keep = if let Some(band) = narrow_band {
+                            let mut keep = if let Some(band) = narrow_band {
                                 sdf.abs() <= band as f32
                             } else {
                                 sdf <= 0.0
                             };
+
+                            if keep
+                                && let Some(h) = hollow
+                                    && sdf < -(h as f32) {
+                                        keep = false;
+                                    }
+
+                            if keep
+                                && let Some(g) = gyroid {
+                                    let freq = g[0];
+                                    let thickness = g[1];
+                                    let px = x * freq;
+                                    let py = y * freq;
+                                    let pz = z * freq;
+                                    let val = px.sin() * py.cos()
+                                        + py.sin() * pz.cos()
+                                        + pz.sin() * px.cos();
+                                    if val.abs() > thickness {
+                                        keep = false;
+                                    }
+                                }
 
                             if keep {
                                 let mut phase = 0;
@@ -466,7 +520,9 @@ mod tests {
         };
 
         let check_err = |res: f64| {
-            let err = processor.voxelize(res, false, None, None).unwrap_err();
+            let err = processor
+                .voxelize(res, false, None, None, None, None)
+                .unwrap_err();
             assert_eq!(
                 err.to_string(),
                 format!(
@@ -482,7 +538,11 @@ mod tests {
         check_err(f64::NAN);
         check_err(f64::INFINITY);
 
-        assert!(processor.voxelize(0.5, false, None, None).is_ok());
+        assert!(
+            processor
+                .voxelize(0.5, false, None, None, None, None)
+                .is_ok()
+        );
     }
 
     #[test]
@@ -504,7 +564,7 @@ mod tests {
 
         let assert_narrow_band_error = |band: f64| {
             let err = processor
-                .voxelize(0.5, false, Some(band), None)
+                .voxelize(0.5, false, Some(band), None, None, None)
                 .unwrap_err();
             assert_eq!(
                 err.to_string(),
@@ -520,8 +580,16 @@ mod tests {
         assert_narrow_band_error(f64::INFINITY);
         assert_narrow_band_error(f64::NEG_INFINITY);
 
-        assert!(processor.voxelize(0.5, false, Some(0.0), None).is_ok());
-        assert!(processor.voxelize(0.5, false, Some(2.0), None).is_ok());
+        assert!(
+            processor
+                .voxelize(0.5, false, Some(0.0), None, None, None)
+                .is_ok()
+        );
+        assert!(
+            processor
+                .voxelize(0.5, false, Some(2.0), None, None, None)
+                .is_ok()
+        );
     }
 
     #[test]
@@ -563,7 +631,9 @@ mod tests {
             bounds_max,
         };
 
-        let particles = processor.voxelize(0.5, false, None, None).unwrap();
+        let particles = processor
+            .voxelize(0.5, false, None, None, None, None)
+            .unwrap();
         assert_eq!(
             particles.len(),
             8,
