@@ -313,7 +313,7 @@ impl MeshProcessor {
                     let mut current_ray = ray;
                     let max_dist = (bounds_max.x.max(self.bounds_max.x) - start_x) + 1.0;
 
-                    let mut hit_xs = Vec::new();
+                    let mut hit_xs = Vec::with_capacity(8);
                     while let Some(hit_toi) = self.mesh.cast_local_ray(&current_ray, max_dist, true)
                     {
                         let hit_point = current_ray.point_at(hit_toi);
@@ -329,6 +329,15 @@ impl MeshProcessor {
                     // Sort intersections just in case precision issues caused out-of-order results
                     hit_xs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
 
+                    #[allow(unused_variables)]
+                    let phase_sphere_check = phase_sphere.map(|sphere| {
+                        let dy = y - sphere[1];
+                        let dz = z - sphere[2];
+                        let r2 = sphere[3] * sphere[3];
+                        let dy2_plus_dz2 = dy * dy + dz * dz;
+                        (sphere[0], dy2_plus_dz2, r2)
+                    });
+
                     // Iterate over X in the inner loop to optimize spatial cache locality.
                     // Because rays are cast along the +X direction, doing X sequentially
                     // keeps the raycast traversals in the same BVH region,
@@ -337,6 +346,8 @@ impl MeshProcessor {
                         let half_res = resolution * 0.5;
                         let cuboid = Cuboid::new(Vector::new(half_res, half_res, half_res));
                         let mesh_iso = Isometry::identity();
+                        #[allow(unused_variables, unused_mut)]
+                        let mut current_hit_idx = 0;
 
                         for ix in 0..nx {
                             let x = bounds_min.x + (ix as f64 * resolution) + (resolution * 0.5);
