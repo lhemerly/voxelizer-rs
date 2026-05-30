@@ -37,6 +37,9 @@ pub struct TransformConfig {
     pub rotate: Option<[f64; 3]>,  // x, y, z in degrees
     pub crop: Option<[f64; 6]>,    // min_x, min_y, min_z, max_x, max_y, max_z
     pub vertex_noise: Option<f64>, // random displacement amplitude
+    pub twist: Option<f64>,        // twist angle in degrees per Y unit
+    pub taper: Option<f64>,        // taper factor along Y axis
+    pub ripple: Option<[f64; 2]>,  // ripple frequency and amplitude
 }
 
 impl Default for TransformConfig {
@@ -48,6 +51,9 @@ impl Default for TransformConfig {
             rotate: None,
             crop: None,
             vertex_noise: None,
+            twist: None,
+            taper: None,
+            ripple: None,
         }
     }
 }
@@ -115,6 +121,33 @@ impl MeshProcessor {
                 p.x *= transform.scale;
                 p.y *= transform.scale;
                 p.z *= transform.scale;
+            }
+        }
+
+        if let Some(twist) = transform.twist {
+            let twist_rad = twist.to_radians();
+            for p in &mut points {
+                let r = (p.x * p.x + p.z * p.z).sqrt();
+                let theta = p.z.atan2(p.x) + twist_rad * p.y;
+                p.x = r * theta.cos();
+                p.z = r * theta.sin();
+            }
+        }
+
+        if let Some(taper) = transform.taper {
+            for p in &mut points {
+                let factor = 1.0 + taper * p.y;
+                p.x *= factor;
+                p.z *= factor;
+            }
+        }
+
+        if let Some(ripple) = transform.ripple {
+            let freq = ripple[0];
+            let amp = ripple[1];
+            for p in &mut points {
+                p.x += (p.y * freq).sin() * amp;
+                p.z += (p.y * freq).cos() * amp;
             }
         }
 
@@ -750,6 +783,103 @@ mod tests {
         assert_eq!(processor.bounds_max.y, 8.0);
         assert_eq!(processor.bounds_max.z, 8.0);
 
+        std::fs::remove_file(file_path).unwrap();
+    }
+
+    #[test]
+    fn test_transform_twist() {
+        let temp_dir = std::env::temp_dir();
+        let file_path = temp_dir.join(format!(
+            "test_twist_{}.stl",
+            std::time::UNIX_EPOCH.elapsed().unwrap().as_nanos()
+        ));
+
+        let faces = vec![[1.0, 1.0, 0.0], [1.0, 1.0, 0.0], [1.0, 1.0, 0.0]];
+        let mut f = std::fs::File::create(&file_path).unwrap();
+        use std::io::Write;
+        f.write_all(&[0; 80]).unwrap();
+        f.write_all(&1u32.to_le_bytes()).unwrap();
+        f.write_all(&[0; 12]).unwrap();
+        for v in &faces {
+            for c in v {
+                f.write_all(&(*c as f32).to_le_bytes()).unwrap();
+            }
+        }
+        f.write_all(&[0; 2]).unwrap();
+
+        let config = TransformConfig {
+            twist: Some(90.0), // 90 degrees per Y unit
+            ..Default::default()
+        };
+        let processor = MeshProcessor::from_file(file_path.to_str().unwrap(), &config).unwrap();
+        // Point (1, 1, 0) twisted 90 degrees (Y=1 -> 90 deg) becomes (0, 1, 1)
+        assert!((processor.bounds_max.x - 0.0).abs() < 1e-5);
+        assert!((processor.bounds_max.z - 1.0).abs() < 1e-5);
+        std::fs::remove_file(file_path).unwrap();
+    }
+
+    #[test]
+    fn test_transform_taper() {
+        let temp_dir = std::env::temp_dir();
+        let file_path = temp_dir.join(format!(
+            "test_taper_{}.stl",
+            std::time::UNIX_EPOCH.elapsed().unwrap().as_nanos()
+        ));
+
+        let faces = vec![[2.0, 2.0, 2.0], [2.0, 2.0, 2.0], [2.0, 2.0, 2.0]];
+        let mut f = std::fs::File::create(&file_path).unwrap();
+        use std::io::Write;
+        f.write_all(&[0; 80]).unwrap();
+        f.write_all(&1u32.to_le_bytes()).unwrap();
+        f.write_all(&[0; 12]).unwrap();
+        for v in &faces {
+            for c in v {
+                f.write_all(&(*c as f32).to_le_bytes()).unwrap();
+            }
+        }
+        f.write_all(&[0; 2]).unwrap();
+
+        let config = TransformConfig {
+            taper: Some(0.5), // factor = 1.0 + 0.5 * 2.0 = 2.0
+            ..Default::default()
+        };
+        let processor = MeshProcessor::from_file(file_path.to_str().unwrap(), &config).unwrap();
+        // Point (2, 2, 2) scaled by 2.0 on X/Z becomes (4, 2, 4)
+        assert!((processor.bounds_max.x - 4.0).abs() < 1e-5);
+        assert!((processor.bounds_max.z - 4.0).abs() < 1e-5);
+        std::fs::remove_file(file_path).unwrap();
+    }
+
+    #[test]
+    fn test_transform_ripple() {
+        let temp_dir = std::env::temp_dir();
+        let file_path = temp_dir.join(format!(
+            "test_ripple_{}.stl",
+            std::time::UNIX_EPOCH.elapsed().unwrap().as_nanos()
+        ));
+
+        // Use y = pi / 2 to get sin(y) = 1, cos(y) = 0
+        let y_val = std::f64::consts::PI / 2.0;
+        let faces = vec![[0.0, y_val, 0.0], [0.0, y_val, 0.0], [0.0, y_val, 0.0]];
+        let mut f = std::fs::File::create(&file_path).unwrap();
+        use std::io::Write;
+        f.write_all(&[0; 80]).unwrap();
+        f.write_all(&1u32.to_le_bytes()).unwrap();
+        f.write_all(&[0; 12]).unwrap();
+        for v in &faces {
+            for c in v {
+                f.write_all(&(*c as f32).to_le_bytes()).unwrap();
+            }
+        }
+        f.write_all(&[0; 2]).unwrap();
+
+        let config = TransformConfig {
+            ripple: Some([1.0, 5.0]), // freq=1.0, amp=5.0
+            ..Default::default()
+        };
+        let processor = MeshProcessor::from_file(file_path.to_str().unwrap(), &config).unwrap();
+        // Point (0, pi/2, 0) should become (5, pi/2, 0) since sin(pi/2)*5 = 5
+        assert!((processor.bounds_max.x - 5.0).abs() < 1e-5);
         std::fs::remove_file(file_path).unwrap();
     }
 

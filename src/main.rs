@@ -45,6 +45,29 @@ struct Args {
 
     #[arg(long)]
     threads: Option<usize>,
+
+    #[arg(long)]
+    twist: Option<f64>,
+
+    #[arg(long)]
+    taper: Option<f64>,
+
+    #[arg(long, value_parser = parse_vec2)]
+    ripple: Option<[f64; 2]>,
+}
+
+fn parse_vec2(s: &str) -> Result<[f64; 2], String> {
+    let parts: Vec<&str> = s.split(',').collect();
+    if parts.len() != 2 {
+        return Err(format!("Expected 'freq,amp', got '{}'", s));
+    }
+    let v0 = parts[0]
+        .parse()
+        .map_err(|_| format!("Invalid freq: {}", parts[0]))?;
+    let v1 = parts[1]
+        .parse()
+        .map_err(|_| format!("Invalid amp: {}", parts[1]))?;
+    Ok([v0, v1])
 }
 
 fn parse_vec4(s: &str) -> Result<[f64; 4], String> {
@@ -155,6 +178,9 @@ fn main() -> anyhow::Result<()> {
         rotate: args.rotate,
         crop: args.crop,
         vertex_noise: args.vertex_noise,
+        twist: args.twist,
+        taper: args.taper,
+        ripple: args.ripple,
     };
 
     let processor = MeshProcessor::from_file(&args.input, &transform)?;
