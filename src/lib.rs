@@ -36,6 +36,7 @@ pub struct TransformConfig {
     pub translate: Option<[f64; 3]>,
     pub rotate: Option<[f64; 3]>,  // x, y, z in degrees
     pub crop: Option<[f64; 6]>,    // min_x, min_y, min_z, max_x, max_y, max_z
+    pub twist: Option<f64>,        // degrees per unit height
     pub vertex_noise: Option<f64>, // random displacement amplitude
 }
 
@@ -47,6 +48,7 @@ impl Default for TransformConfig {
             translate: None,
             rotate: None,
             crop: None,
+            twist: None,
             vertex_noise: None,
         }
     }
@@ -123,6 +125,21 @@ impl MeshProcessor {
                 p.x += t[0];
                 p.y += t[1];
                 p.z += t[2];
+            }
+        }
+
+        #[allow(clippy::collapsible_if)]
+        if let Some(twist) = transform.twist {
+            if twist.abs() > f64::EPSILON {
+                for p in &mut points {
+                    let angle = p.z * twist.to_radians();
+                    let cos_a = angle.cos();
+                    let sin_a = angle.sin();
+                    let nx = p.x * cos_a - p.y * sin_a;
+                    let ny = p.x * sin_a + p.y * cos_a;
+                    p.x = nx;
+                    p.y = ny;
+                }
             }
         }
 
@@ -785,6 +802,61 @@ mod tests {
         // The point (1,0,0) rotated 90 degrees around Z should become (0,1,0)
         assert!((processor.bounds_min.x - 0.0).abs() < 1e-5);
         assert!((processor.bounds_max.y - 1.0).abs() < 1e-5);
+
+        std::fs::remove_file(file_path).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod additional_tests {
+    use super::*;
+
+    #[test]
+    fn test_transform_twist() {
+        let temp_dir = std::env::temp_dir();
+        let file_path = temp_dir.join(format!(
+            "test_twist_{}.stl",
+            std::time::UNIX_EPOCH.elapsed().unwrap().as_nanos()
+        ));
+
+        let faces = vec![[1.0, 0.0, 0.0], [1.0, 0.0, 1.0], [1.0, 0.0, 2.0]];
+
+        let mut f = std::fs::File::create(&file_path).unwrap();
+        use std::io::Write;
+        f.write_all(&[0; 80]).unwrap();
+        f.write_all(&1u32.to_le_bytes()).unwrap();
+        f.write_all(&[0; 12]).unwrap();
+        for v in &faces {
+            for c in v {
+                f.write_all(&(*c as f32).to_le_bytes()).unwrap();
+            }
+        }
+        f.write_all(&[0; 2]).unwrap();
+
+        let config = TransformConfig {
+            twist: Some(90.0), // 90 degrees per unit of Z
+            ..Default::default()
+        };
+
+        let processor = MeshProcessor::from_file(file_path.to_str().unwrap(), &config).unwrap();
+
+        // Original point 1 (1, 0, 0): z=0 => angle=0 => (1, 0, 0)
+        // Original point 2 (1, 0, 1): z=1 => angle=90 => (0, 1, 1)
+        // Original point 3 (1, 0, 2): z=2 => angle=180 => (-1, 0, 2)
+
+        let pts = processor.mesh.vertices();
+
+        let p1 = pts[0];
+        assert!((p1.x - 1.0).abs() < 1e-5);
+        assert!((p1.y - 0.0).abs() < 1e-5);
+
+        let p2 = pts[1];
+        assert!((p2.x - 0.0).abs() < 1e-5);
+        assert!((p2.y - 1.0).abs() < 1e-5);
+
+        let p3 = pts[2];
+        assert!((p3.x - (-1.0)).abs() < 1e-5);
+        assert!((p3.y - 0.0).abs() < 1e-5);
 
         std::fs::remove_file(file_path).unwrap();
     }

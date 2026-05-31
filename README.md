@@ -47,6 +47,8 @@ Arguments:
 
 ``` --crop ```: Crops the mesh to the given bounding box 'min_x,min_y,min_z,max_x,max_y,max_z' (e.g., `--crop -10,-10,-10,10,10,10`).
 
+``` --twist ```: Optional float. Twists the mesh around the Z-axis by the given degrees per unit of Z height (e.g., `--twist 5.0`).
+
 ``` --vertex-noise ```: Adds random displacement noise with the specified amplitude.
 
 ``` --phase-sphere ```: Specify a sphere for assigning a phase 'x,y,z,radius' (e.g., `--phase-sphere 0,0,0,5`).
