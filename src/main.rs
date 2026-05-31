@@ -38,6 +38,9 @@ struct Args {
     crop: Option<[f64; 6]>,
 
     #[arg(long)]
+    twist: Option<f64>,
+
+    #[arg(long)]
     vertex_noise: Option<f64>,
 
     #[arg(long, value_parser = parse_vec4)]
@@ -154,6 +157,7 @@ fn main() -> anyhow::Result<()> {
         translate: args.translate,
         rotate: args.rotate,
         crop: args.crop,
+        twist: args.twist,
         vertex_noise: args.vertex_noise,
     };
 
