@@ -313,7 +313,7 @@ impl MeshProcessor {
                     let mut current_ray = ray;
                     let max_dist = (bounds_max.x.max(self.bounds_max.x) - start_x) + 1.0;
 
-                    let mut hit_xs = Vec::new();
+                    let mut hit_xs = Vec::with_capacity(8);
                     while let Some(hit_toi) = self.mesh.cast_local_ray(&current_ray, max_dist, true)
                     {
                         let hit_point = current_ray.point_at(hit_toi);
@@ -337,17 +337,21 @@ impl MeshProcessor {
                         let half_res = resolution * 0.5;
                         let cuboid = Cuboid::new(Vector::new(half_res, half_res, half_res));
                         let mesh_iso = Isometry::identity();
+                        let mut hit_idx = 0;
 
                         for ix in 0..nx {
                             let x = bounds_min.x + (ix as f64 * resolution) + (resolution * 0.5);
                             let point = Point::new(x, y, z);
                             let voxel_iso = Isometry::translation(point.x, point.y, point.z);
 
+                            while hit_idx < hit_xs.len() && hit_xs[hit_idx] <= x {
+                                hit_idx += 1;
+                            }
+
                             if let Ok(true) =
                                 intersection_test(&mesh_iso, &self.mesh, &voxel_iso, &cuboid)
                             {
-                                let intersections_to_right =
-                                    hit_xs.len() - hit_xs.partition_point(|&hx| hx <= x);
+                                let intersections_to_right = hit_xs.len() - hit_idx;
                                 let is_inside = intersections_to_right % 2 != 0;
 
                                 let distance =
@@ -387,14 +391,17 @@ impl MeshProcessor {
                             }
                         }
                     } else {
+                        let mut hit_idx = 0;
                         for ix in 0..nx {
                             let x = bounds_min.x + (ix as f64 * resolution) + (resolution * 0.5);
                             let point_3d = Point::new(x, y, z);
 
                             // A point is inside if it has an odd number of intersections to its right (or left).
-                            // hit_xs is sorted, so we can use partition_point for O(log N) lookup.
-                            let intersections_to_right =
-                                hit_xs.len() - hit_xs.partition_point(|&hx| hx <= x);
+                            // hit_xs is sorted, so we can use an amortized O(1) rolling index.
+                            while hit_idx < hit_xs.len() && hit_xs[hit_idx] <= x {
+                                hit_idx += 1;
+                            }
+                            let intersections_to_right = hit_xs.len() - hit_idx;
 
                             let is_inside = intersections_to_right % 2 != 0;
 
