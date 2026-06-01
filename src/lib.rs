@@ -8,6 +8,74 @@ use serde::{Deserialize, Serialize};
 use std::fs::File;
 use std::path::Path;
 
+fn lerp(t: f64, a: f64, b: f64) -> f64 {
+    a + t * (b - a)
+}
+fn fade(t: f64) -> f64 {
+    t * t * t * (t * (t * 6.0 - 15.0) + 10.0)
+}
+fn grad(hash: i32, x: f64, y: f64, z: f64) -> f64 {
+    let h = hash & 15;
+    let u = if h < 8 { x } else { y };
+    let v = if h < 4 {
+        y
+    } else if h == 12 || h == 14 {
+        x
+    } else {
+        z
+    };
+    (if (h & 1) == 0 { u } else { -u }) + (if (h & 2) == 0 { v } else { -v })
+}
+
+pub fn perlin_3d(x: f64, y: f64, z: f64) -> f64 {
+    let xi = x.floor() as i32;
+    let yi = y.floor() as i32;
+    let zi = z.floor() as i32;
+    let xf = x - x.floor();
+    let yf = y - y.floor();
+    let zf = z - z.floor();
+    let u = fade(xf);
+    let v = fade(yf);
+    let w = fade(zf);
+    let p = |xi: i32, yi: i32, zi: i32| {
+        let mut h = xi
+            .wrapping_mul(1619)
+            .wrapping_add(yi.wrapping_mul(31337))
+            .wrapping_add(zi.wrapping_mul(6971));
+        h = h.wrapping_mul(1664525).wrapping_add(1013904223);
+        h ^= h >> 16;
+        h
+    };
+    let aa = p(xi, yi, zi);
+    let ab = p(xi, yi + 1, zi);
+    let ba = p(xi + 1, yi, zi);
+    let bb = p(xi + 1, yi + 1, zi);
+    let aa1 = p(xi, yi, zi + 1);
+    let ab1 = p(xi, yi + 1, zi + 1);
+    let ba1 = p(xi + 1, yi, zi + 1);
+    let bb1 = p(xi + 1, yi + 1, zi + 1);
+
+    let x1 = lerp(u, grad(aa, xf, yf, zf), grad(ba, xf - 1.0, yf, zf));
+    let x2 = lerp(
+        u,
+        grad(ab, xf, yf - 1.0, zf),
+        grad(bb, xf - 1.0, yf - 1.0, zf),
+    );
+    let y1 = lerp(v, x1, x2);
+    let x3 = lerp(
+        u,
+        grad(aa1, xf, yf, zf - 1.0),
+        grad(ba1, xf - 1.0, yf, zf - 1.0),
+    );
+    let x4 = lerp(
+        u,
+        grad(ab1, xf, yf - 1.0, zf - 1.0),
+        grad(bb1, xf - 1.0, yf - 1.0, zf - 1.0),
+    );
+    let y2 = lerp(v, x3, x4);
+    lerp(w, y1, y2)
+}
+
 #[derive(Serialize, Deserialize, Debug)]
 pub struct ParticleHeader {
     pub version: u32,
@@ -34,9 +102,12 @@ pub struct TransformConfig {
     pub scale: f64,
     pub center: bool,
     pub translate: Option<[f64; 3]>,
-    pub rotate: Option<[f64; 3]>,  // x, y, z in degrees
-    pub crop: Option<[f64; 6]>,    // min_x, min_y, min_z, max_x, max_y, max_z
-    pub vertex_noise: Option<f64>, // random displacement amplitude
+    pub rotate: Option<[f64; 3]>,       // x, y, z in degrees
+    pub crop: Option<[f64; 6]>,         // min_x, min_y, min_z, max_x, max_y, max_z
+    pub vertex_noise: Option<f64>,      // random displacement amplitude
+    pub twist: Option<f64>,             // degrees per unit on Y axis
+    pub taper: Option<f64>,             // scale per unit on Y axis
+    pub perlin_noise: Option<[f64; 3]>, // amplitude, frequency, seed offset
 }
 
 impl Default for TransformConfig {
@@ -48,6 +119,9 @@ impl Default for TransformConfig {
             rotate: None,
             crop: None,
             vertex_noise: None,
+            twist: None,
+            taper: None,
+            perlin_noise: None,
         }
     }
 }
@@ -123,6 +197,42 @@ impl MeshProcessor {
                 p.x += t[0];
                 p.y += t[1];
                 p.z += t[2];
+            }
+        }
+
+        if let Some(taper) = transform.taper {
+            for p in &mut points {
+                let scale = 1.0 + p.y * taper;
+                p.x *= scale;
+                p.z *= scale;
+            }
+        }
+
+        if let Some(twist) = transform.twist {
+            for p in &mut points {
+                let angle = (p.y * twist).to_radians();
+                let cos_a = angle.cos();
+                let sin_a = angle.sin();
+                let nx = p.x * cos_a - p.z * sin_a;
+                let nz = p.x * sin_a + p.z * cos_a;
+                p.x = nx;
+                p.z = nz;
+            }
+        }
+
+        if let Some(noise_cfg) = transform.perlin_noise {
+            let amp = noise_cfg[0];
+            let freq = noise_cfg[1];
+            let seed = noise_cfg[2];
+            if amp > 0.0 {
+                for p in &mut points {
+                    let nx = perlin_3d(p.x * freq + seed, p.y * freq, p.z * freq);
+                    let ny = perlin_3d(p.x * freq, p.y * freq + seed + 100.0, p.z * freq);
+                    let nz = perlin_3d(p.x * freq, p.y * freq, p.z * freq + seed + 200.0);
+                    p.x += nx * amp;
+                    p.y += ny * amp;
+                    p.z += nz * amp;
+                }
             }
         }
 
@@ -749,6 +859,77 @@ mod tests {
         assert_eq!(processor.bounds_max.x, 8.0);
         assert_eq!(processor.bounds_max.y, 8.0);
         assert_eq!(processor.bounds_max.z, 8.0);
+
+        std::fs::remove_file(file_path).unwrap();
+    }
+
+    #[test]
+    fn test_transform_twist() {
+        let temp_dir = std::env::temp_dir();
+        let file_path = temp_dir.join(format!(
+            "test_twist_{}.stl",
+            std::time::UNIX_EPOCH.elapsed().unwrap().as_nanos()
+        ));
+
+        let faces = vec![[1.0, 1.0, 0.0], [1.0, 1.0, 0.0], [1.0, 1.0, 0.0]];
+
+        let mut f = std::fs::File::create(&file_path).unwrap();
+        use std::io::Write;
+        f.write_all(&[0; 80]).unwrap();
+        f.write_all(&1u32.to_le_bytes()).unwrap();
+        f.write_all(&[0; 12]).unwrap();
+        for v in &faces {
+            for c in v {
+                f.write_all(&(*c as f32).to_le_bytes()).unwrap();
+            }
+        }
+        f.write_all(&[0; 2]).unwrap();
+
+        let config = TransformConfig {
+            twist: Some(90.0), // 90 degrees at Y=1.0
+            ..Default::default()
+        };
+
+        let processor = MeshProcessor::from_file(file_path.to_str().unwrap(), &config).unwrap();
+
+        // X=1.0, Y=1.0, Z=0.0 twisted by 90 deg -> X=0.0, Y=1.0, Z=1.0
+        assert!((processor.bounds_min.x - 0.0).abs() < 1e-5);
+        assert!((processor.bounds_max.z - 1.0).abs() < 1e-5);
+
+        std::fs::remove_file(file_path).unwrap();
+    }
+
+    #[test]
+    fn test_transform_taper() {
+        let temp_dir = std::env::temp_dir();
+        let file_path = temp_dir.join(format!(
+            "test_taper_{}.stl",
+            std::time::UNIX_EPOCH.elapsed().unwrap().as_nanos()
+        ));
+
+        let faces = vec![[1.0, 2.0, 0.0], [1.0, 2.0, 0.0], [1.0, 2.0, 0.0]];
+
+        let mut f = std::fs::File::create(&file_path).unwrap();
+        use std::io::Write;
+        f.write_all(&[0; 80]).unwrap();
+        f.write_all(&1u32.to_le_bytes()).unwrap();
+        f.write_all(&[0; 12]).unwrap();
+        for v in &faces {
+            for c in v {
+                f.write_all(&(*c as f32).to_le_bytes()).unwrap();
+            }
+        }
+        f.write_all(&[0; 2]).unwrap();
+
+        let config = TransformConfig {
+            taper: Some(0.5), // Scale becomes 1.0 + 2.0*0.5 = 2.0
+            ..Default::default()
+        };
+
+        let processor = MeshProcessor::from_file(file_path.to_str().unwrap(), &config).unwrap();
+
+        // X=1.0 tapped by 2.0 -> X=2.0
+        assert!((processor.bounds_min.x - 2.0).abs() < 1e-5);
 
         std::fs::remove_file(file_path).unwrap();
     }
