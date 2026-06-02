@@ -45,72 +45,56 @@ struct Args {
 
     #[arg(long)]
     threads: Option<usize>,
+
+    #[arg(long)]
+    taper: Option<f64>,
+
+    #[arg(long)]
+    twist: Option<f64>,
+
+    #[arg(long, value_parser = parse_vec2)]
+    perlin_noise: Option<[f64; 2]>,
+
+    #[arg(long)]
+    kaleidoscope: bool,
+
+    #[arg(long)]
+    vox_color: Option<String>,
+}
+
+fn parse_vec<const N: usize>(s: &str) -> Result<[f64; N], String> {
+    let parts: Vec<&str> = s.split(',').collect();
+    if parts.len() != N {
+        return Err(format!("Expected {} values, got '{}'", N, s));
+    }
+    let mut arr = [0.0; N];
+    for i in 0..N {
+        arr[i] = parts[i]
+            .parse()
+            .map_err(|_| format!("Invalid value: {}", parts[i]))?;
+    }
+    Ok(arr)
 }
 
 fn parse_vec4(s: &str) -> Result<[f64; 4], String> {
-    let parts: Vec<&str> = s.split(',').collect();
-    if parts.len() != 4 {
-        return Err(format!("Expected 'x,y,z,radius', got '{}'", s));
-    }
-    let x = parts[0]
-        .parse()
-        .map_err(|_| format!("Invalid x: {}", parts[0]))?;
-    let y = parts[1]
-        .parse()
-        .map_err(|_| format!("Invalid y: {}", parts[1]))?;
-    let z = parts[2]
-        .parse()
-        .map_err(|_| format!("Invalid z: {}", parts[2]))?;
-    let w = parts[3]
-        .parse()
-        .map_err(|_| format!("Invalid radius: {}", parts[3]))?;
-    Ok([x, y, z, w])
+    parse_vec::<4>(s).map_err(|_| format!("Expected 'x,y,z,radius', got '{}'", s))
 }
 
 fn parse_vec6(s: &str) -> Result<[f64; 6], String> {
-    let parts: Vec<&str> = s.split(',').collect();
-    if parts.len() != 6 {
-        return Err(format!(
+    parse_vec::<6>(s).map_err(|_| {
+        format!(
             "Expected 'min_x,min_y,min_z,max_x,max_y,max_z', got '{}'",
             s
-        ));
-    }
-    let v0 = parts[0]
-        .parse()
-        .map_err(|_| format!("Invalid value: {}", parts[0]))?;
-    let v1 = parts[1]
-        .parse()
-        .map_err(|_| format!("Invalid value: {}", parts[1]))?;
-    let v2 = parts[2]
-        .parse()
-        .map_err(|_| format!("Invalid value: {}", parts[2]))?;
-    let v3 = parts[3]
-        .parse()
-        .map_err(|_| format!("Invalid value: {}", parts[3]))?;
-    let v4 = parts[4]
-        .parse()
-        .map_err(|_| format!("Invalid value: {}", parts[4]))?;
-    let v5 = parts[5]
-        .parse()
-        .map_err(|_| format!("Invalid value: {}", parts[5]))?;
-    Ok([v0, v1, v2, v3, v4, v5])
+        )
+    })
 }
 
 fn parse_vec3(s: &str) -> Result<[f64; 3], String> {
-    let parts: Vec<&str> = s.split(',').collect();
-    if parts.len() != 3 {
-        return Err(format!("Expected 'x,y,z', got '{}'", s));
-    }
-    let x = parts[0]
-        .parse()
-        .map_err(|_| format!("Invalid x: {}", parts[0]))?;
-    let y = parts[1]
-        .parse()
-        .map_err(|_| format!("Invalid y: {}", parts[1]))?;
-    let z = parts[2]
-        .parse()
-        .map_err(|_| format!("Invalid z: {}", parts[2]))?;
-    Ok([x, y, z])
+    parse_vec::<3>(s).map_err(|_| format!("Expected 'x,y,z', got '{}'", s))
+}
+
+fn parse_vec2(s: &str) -> Result<[f64; 2], String> {
+    parse_vec::<2>(s).map_err(|_| format!("Expected 'amplitude,frequency', got '{}'", s))
 }
 
 fn validate_resolution(s: &str) -> Result<f64, String> {
@@ -155,6 +139,10 @@ fn main() -> anyhow::Result<()> {
         rotate: args.rotate,
         crop: args.crop,
         vertex_noise: args.vertex_noise,
+        taper: args.taper,
+        twist: args.twist,
+        perlin_noise: args.perlin_noise,
+        kaleidoscope: args.kaleidoscope,
     };
 
     let processor = MeshProcessor::from_file(&args.input, &transform)?;
@@ -259,9 +247,20 @@ fn main() -> anyhow::Result<()> {
                 size_z = size_z.min(256);
             }
 
-            // MagicaVoxel format requires a 256-color palette. We'll just use color index 1 for solid and 2 for surface.
-            // Since phase isn't always reliable for surface/solid coloring, we can color by phase or just use 1.
             let num_voxels = particles.len() as u32;
+
+            let use_custom_palette = args.vox_color.is_some();
+
+            let mut min_val = f32::MAX;
+            let mut max_val = f32::MIN;
+
+            if let Some(color_mode) = &args.vox_color {
+                for p in &particles {
+                    let val = if color_mode == "depth" { p.sdf } else { p.z };
+                    min_val = min_val.min(val);
+                    max_val = max_val.max(val);
+                }
+            }
 
             // Header
             writer.write_all(b"VOX ")?;
@@ -270,8 +269,12 @@ fn main() -> anyhow::Result<()> {
             // MAIN chunk
             writer.write_all(b"MAIN")?;
             writer.write_all(&0u32.to_le_bytes())?;
+
             // Size of children: SIZE chunk (24) + XYZI chunk (16 + 4 * num_voxels)
-            let children_size = 24 + 16 + num_voxels * 4;
+            let mut children_size = 24 + 16 + num_voxels * 4;
+            if use_custom_palette {
+                children_size += 1024 + 12; // RGBA chunk
+            }
             writer.write_all(&children_size.to_le_bytes())?;
 
             // SIZE chunk
@@ -299,8 +302,36 @@ fn main() -> anyhow::Result<()> {
                 vy = vy.clamp(0, 255);
                 vz = vz.clamp(0, 255);
 
-                let color_idx = if p.phase > 0 { 2u8 } else { 1u8 };
+                let mut color_idx = if p.phase > 0 { 2u8 } else { 1u8 };
+
+                if let Some(color_mode) = &args.vox_color {
+                    let val = if color_mode == "depth" { p.sdf } else { p.z };
+                    let range = max_val - min_val;
+                    if range > 1e-6 {
+                        let normalized = (val - min_val) / range;
+                        // index 1-255
+                        color_idx = (normalized * 254.0).round() as u8 + 1;
+                    } else {
+                        color_idx = 128;
+                    }
+                }
+
                 writer.write_all(&[vx as u8, vy as u8, vz as u8, color_idx])?;
+            }
+
+            if use_custom_palette {
+                writer.write_all(b"RGBA")?;
+                writer.write_all(&1024u32.to_le_bytes())?;
+                writer.write_all(&0u32.to_le_bytes())?;
+                for i in 1..=256 {
+                    let normalized = (i as f32 - 1.0) / 254.0;
+                    // simple cyan to magenta interpolation
+                    let r = (normalized * 255.0) as u8;
+                    let g = ((1.0 - normalized) * 255.0) as u8;
+                    let b = 255u8;
+                    let a = 255u8;
+                    writer.write_all(&[r, g, b, a])?;
+                }
             }
         }
         Some("obj") => {

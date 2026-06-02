@@ -29,6 +29,104 @@ pub struct ParticleData {
 
 type MeshData = (Vec<Point<f64>>, Vec<[u32; 3]>);
 
+struct Perlin {
+    p: [usize; 512],
+}
+
+impl Perlin {
+    fn new(seed: u32) -> Self {
+        let mut p = [0; 512];
+        let mut permutation: Vec<usize> = (0..256).collect();
+        let mut rng = seed;
+
+        for i in (1..256).rev() {
+            rng = rng.wrapping_mul(1664525).wrapping_add(1013904223);
+            let j = (rng as usize) % (i + 1);
+            permutation.swap(i, j);
+        }
+
+        for i in 0..256 {
+            p[i] = permutation[i];
+            p[256 + i] = permutation[i];
+        }
+        Self { p }
+    }
+
+    fn fade(t: f64) -> f64 {
+        t * t * t * (t * (t * 6.0 - 15.0) + 10.0)
+    }
+    fn lerp(t: f64, a: f64, b: f64) -> f64 {
+        a + t * (b - a)
+    }
+    fn grad(hash: usize, x: f64, y: f64, z: f64) -> f64 {
+        let h = hash & 15;
+        let u = if h < 8 { x } else { y };
+        let v = if h < 4 {
+            y
+        } else if h == 12 || h == 14 {
+            x
+        } else {
+            z
+        };
+        (if (h & 1) == 0 { u } else { -u }) + (if (h & 2) == 0 { v } else { -v })
+    }
+
+    fn noise(&self, x: f64, y: f64, z: f64) -> f64 {
+        let x_floor = x.floor() as isize & 255;
+        let y_floor = y.floor() as isize & 255;
+        let z_floor = z.floor() as isize & 255;
+
+        let x_idx = x_floor as usize;
+        let y_idx = y_floor as usize;
+        let z_idx = z_floor as usize;
+
+        let x_rem = x - x.floor();
+        let y_rem = y - y.floor();
+        let z_rem = z - z.floor();
+
+        let u = Self::fade(x_rem);
+        let v = Self::fade(y_rem);
+        let w = Self::fade(z_rem);
+
+        let a = self.p[x_idx] + y_idx;
+        let aa = self.p[a] + z_idx;
+        let ab = self.p[a + 1] + z_idx;
+        let b = self.p[x_idx + 1] + y_idx;
+        let ba = self.p[b] + z_idx;
+        let bb = self.p[b + 1] + z_idx;
+
+        Self::lerp(
+            w,
+            Self::lerp(
+                v,
+                Self::lerp(
+                    u,
+                    Self::grad(self.p[aa], x_rem, y_rem, z_rem),
+                    Self::grad(self.p[ba], x_rem - 1.0, y_rem, z_rem),
+                ),
+                Self::lerp(
+                    u,
+                    Self::grad(self.p[ab], x_rem, y_rem - 1.0, z_rem),
+                    Self::grad(self.p[bb], x_rem - 1.0, y_rem - 1.0, z_rem),
+                ),
+            ),
+            Self::lerp(
+                v,
+                Self::lerp(
+                    u,
+                    Self::grad(self.p[aa + 1], x_rem, y_rem, z_rem - 1.0),
+                    Self::grad(self.p[ba + 1], x_rem - 1.0, y_rem, z_rem - 1.0),
+                ),
+                Self::lerp(
+                    u,
+                    Self::grad(self.p[ab + 1], x_rem, y_rem - 1.0, z_rem - 1.0),
+                    Self::grad(self.p[bb + 1], x_rem - 1.0, y_rem - 1.0, z_rem - 1.0),
+                ),
+            ),
+        )
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct TransformConfig {
     pub scale: f64,
@@ -37,6 +135,10 @@ pub struct TransformConfig {
     pub rotate: Option<[f64; 3]>,  // x, y, z in degrees
     pub crop: Option<[f64; 6]>,    // min_x, min_y, min_z, max_x, max_y, max_z
     pub vertex_noise: Option<f64>, // random displacement amplitude
+    pub taper: Option<f64>,
+    pub twist: Option<f64>,
+    pub perlin_noise: Option<[f64; 2]>,
+    pub kaleidoscope: bool,
 }
 
 impl Default for TransformConfig {
@@ -48,6 +150,10 @@ impl Default for TransformConfig {
             rotate: None,
             crop: None,
             vertex_noise: None,
+            taper: None,
+            twist: None,
+            perlin_noise: None,
+            kaleidoscope: false,
         }
     }
 }
@@ -64,7 +170,7 @@ impl MeshProcessor {
         let extension = path_obj.extension().and_then(|s| s.to_str());
         let ext_lower = extension.map(|e| e.to_lowercase());
 
-        let (mut points, indices) = match ext_lower.as_deref() {
+        let (mut points, mut indices) = match ext_lower.as_deref() {
             Some("obj") => Self::load_obj(path)?,
             Some("stl") => Self::load_stl(path)?,
             Some(ext) => anyhow::bail!("Unsupported file format: {}", ext),
@@ -144,6 +250,99 @@ impl MeshProcessor {
                     p.z += rz * amp;
                 }
             }
+        }
+
+        let mut min_z_val = f64::MAX;
+        let mut max_z_val = f64::MIN;
+        if transform.taper.is_some() || transform.twist.is_some() {
+            for p in &points {
+                min_z_val = min_z_val.min(p.z);
+                max_z_val = max_z_val.max(p.z);
+            }
+        }
+
+        if let Some(taper_factor) = transform.taper {
+            let z_range = max_z_val - min_z_val;
+            if z_range > 1e-6 {
+                for p in &mut points {
+                    let normalized_z = (p.z - min_z_val) / z_range;
+                    let scale = 1.0 - normalized_z * taper_factor;
+                    p.x *= scale;
+                    p.y *= scale;
+                }
+            }
+        }
+
+        if let Some(twist_angle) = transform.twist {
+            let z_range = max_z_val - min_z_val;
+            if z_range > 1e-6 {
+                let max_rads = twist_angle.to_radians();
+                for p in &mut points {
+                    let normalized_z = (p.z - min_z_val) / z_range;
+                    let angle = normalized_z * max_rads;
+                    let cos_a = angle.cos();
+                    let sin_a = angle.sin();
+                    let nx = p.x * cos_a - p.y * sin_a;
+                    let ny = p.x * sin_a + p.y * cos_a;
+                    p.x = nx;
+                    p.y = ny;
+                }
+            }
+        }
+
+        if let Some([amp, freq]) = transform.perlin_noise {
+            let perlin = Perlin::new(12345);
+            for p in &mut points {
+                let nx = p.x * freq;
+                let ny = p.y * freq;
+                let nz = p.z * freq;
+                let noise_val = perlin.noise(nx, ny, nz);
+                p.x += noise_val * amp;
+                p.y += noise_val * amp;
+                p.z += noise_val * amp;
+            }
+        }
+
+        if transform.kaleidoscope {
+            let original_points_len = points.len() as u32;
+            let mut mirrored_points = Vec::with_capacity(points.len() * 3);
+            let mut mirrored_indices = Vec::with_capacity(indices.len() * 3);
+
+            // Mirror X
+            for p in &points {
+                mirrored_points.push(Point::new(-p.x, p.y, p.z));
+            }
+            for i in &indices {
+                // reverse winding order
+                mirrored_indices.push([
+                    i[0] + original_points_len,
+                    i[2] + original_points_len,
+                    i[1] + original_points_len,
+                ]);
+            }
+
+            // Combine X
+            let double_points_len = original_points_len * 2;
+            points.extend(mirrored_points.clone());
+            indices.extend(mirrored_indices.clone());
+
+            // Mirror Y
+            mirrored_points.clear();
+            mirrored_indices.clear();
+
+            for p in &points {
+                mirrored_points.push(Point::new(p.x, -p.y, p.z));
+            }
+            for i in &indices {
+                mirrored_indices.push([
+                    i[0] + double_points_len,
+                    i[2] + double_points_len,
+                    i[1] + double_points_len,
+                ]);
+            }
+
+            points.extend(mirrored_points);
+            indices.extend(mirrored_indices);
         }
 
         let mesh = TriMesh::new(points, indices);
@@ -785,6 +984,43 @@ mod tests {
         // The point (1,0,0) rotated 90 degrees around Z should become (0,1,0)
         assert!((processor.bounds_min.x - 0.0).abs() < 1e-5);
         assert!((processor.bounds_max.y - 1.0).abs() < 1e-5);
+
+        std::fs::remove_file(file_path).unwrap();
+    }
+
+    #[test]
+    fn test_transform_kaleidoscope() {
+        let temp_dir = std::env::temp_dir();
+        let file_path = temp_dir.join(format!(
+            "test_kal_{}.stl",
+            std::time::UNIX_EPOCH.elapsed().unwrap().as_nanos()
+        ));
+
+        let faces = vec![[1.0, 1.0, 1.0], [2.0, 1.0, 1.0], [1.0, 2.0, 1.0]];
+
+        let mut f = std::fs::File::create(&file_path).unwrap();
+        use std::io::Write;
+        f.write_all(&[0; 80]).unwrap();
+        f.write_all(&1u32.to_le_bytes()).unwrap();
+        f.write_all(&[0; 12]).unwrap();
+        for v in &faces {
+            for c in v {
+                f.write_all(&(*c as f32).to_le_bytes()).unwrap();
+            }
+        }
+        f.write_all(&[0; 2]).unwrap();
+
+        let config = TransformConfig {
+            kaleidoscope: true,
+            ..Default::default()
+        };
+
+        let processor = MeshProcessor::from_file(file_path.to_str().unwrap(), &config).unwrap();
+
+        assert_eq!(processor.bounds_min.x, -2.0);
+        assert_eq!(processor.bounds_max.x, 2.0);
+        assert_eq!(processor.bounds_min.y, -2.0);
+        assert_eq!(processor.bounds_max.y, 2.0);
 
         std::fs::remove_file(file_path).unwrap();
     }
