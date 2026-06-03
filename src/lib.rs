@@ -252,6 +252,8 @@ impl MeshProcessor {
         surface_only: bool,
         narrow_band: Option<f64>,
         phase_sphere: Option<[f64; 4]>,
+        infill: Option<&str>,
+        infill_scale: Option<f64>,
     ) -> Result<Vec<ParticleData>> {
         if !resolution.is_finite() || resolution <= 1e-6 {
             anyhow::bail!(
@@ -402,11 +404,35 @@ impl MeshProcessor {
                                 self.mesh.distance_to_local_point(&point_3d, false) as f32;
                             let sdf = if is_inside { -distance } else { distance };
 
-                            let keep = if let Some(band) = narrow_band {
+                            let mut keep = if let Some(band) = narrow_band {
                                 sdf.abs() <= band as f32
                             } else {
                                 sdf <= 0.0
                             };
+
+                            if keep {
+                                if let Some(pattern) = infill {
+                                    let scale = infill_scale.unwrap_or(1.0);
+                                    let px = x * scale;
+                                    let py = y * scale;
+                                    let pz = z * scale;
+                                    if pattern == "gyroid" {
+                                        let val = px.sin() * py.cos()
+                                            + py.sin() * pz.cos()
+                                            + pz.sin() * px.cos();
+                                        if val > 0.0 {
+                                            keep = false;
+                                        }
+                                    } else if pattern == "grid" {
+                                        let val = (px.rem_euclid(1.0) < 0.2) as u8
+                                            + (py.rem_euclid(1.0) < 0.2) as u8
+                                            + (pz.rem_euclid(1.0) < 0.2) as u8;
+                                        if val < 2 {
+                                            keep = false;
+                                        }
+                                    }
+                                }
+                            }
 
                             if keep {
                                 let mut phase = 0;
@@ -466,7 +492,9 @@ mod tests {
         };
 
         let check_err = |res: f64| {
-            let err = processor.voxelize(res, false, None, None).unwrap_err();
+            let err = processor
+                .voxelize(res, false, None, None, None, None)
+                .unwrap_err();
             assert_eq!(
                 err.to_string(),
                 format!(
@@ -482,7 +510,11 @@ mod tests {
         check_err(f64::NAN);
         check_err(f64::INFINITY);
 
-        assert!(processor.voxelize(0.5, false, None, None).is_ok());
+        assert!(
+            processor
+                .voxelize(0.5, false, None, None, None, None)
+                .is_ok()
+        );
     }
 
     #[test]
@@ -504,7 +536,7 @@ mod tests {
 
         let assert_narrow_band_error = |band: f64| {
             let err = processor
-                .voxelize(0.5, false, Some(band), None)
+                .voxelize(0.5, false, Some(band), None, None, None)
                 .unwrap_err();
             assert_eq!(
                 err.to_string(),
@@ -520,8 +552,16 @@ mod tests {
         assert_narrow_band_error(f64::INFINITY);
         assert_narrow_band_error(f64::NEG_INFINITY);
 
-        assert!(processor.voxelize(0.5, false, Some(0.0), None).is_ok());
-        assert!(processor.voxelize(0.5, false, Some(2.0), None).is_ok());
+        assert!(
+            processor
+                .voxelize(0.5, false, Some(0.0), None, None, None)
+                .is_ok()
+        );
+        assert!(
+            processor
+                .voxelize(0.5, false, Some(2.0), None, None, None)
+                .is_ok()
+        );
     }
 
     #[test]
@@ -563,7 +603,9 @@ mod tests {
             bounds_max,
         };
 
-        let particles = processor.voxelize(0.5, false, None, None).unwrap();
+        let particles = processor
+            .voxelize(0.5, false, None, None, None, None)
+            .unwrap();
         assert_eq!(
             particles.len(),
             8,
