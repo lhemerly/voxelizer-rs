@@ -333,6 +333,7 @@ impl MeshProcessor {
                     // Because rays are cast along the +X direction, doing X sequentially
                     // keeps the raycast traversals in the same BVH region,
                     // while parallelizing over (Y, Z) ensures finer granularity for Rayon.
+                    let mut hit_idx = 0;
                     if surface_only {
                         let half_res = resolution * 0.5;
                         let cuboid = Cuboid::new(Vector::new(half_res, half_res, half_res));
@@ -346,8 +347,10 @@ impl MeshProcessor {
                             if let Ok(true) =
                                 intersection_test(&mesh_iso, &self.mesh, &voxel_iso, &cuboid)
                             {
-                                let intersections_to_right =
-                                    hit_xs.len() - hit_xs.partition_point(|&hx| hx <= x);
+                                while hit_idx < hit_xs.len() && hit_xs[hit_idx] <= x {
+                                    hit_idx += 1;
+                                }
+                                let intersections_to_right = hit_xs.len() - hit_idx;
                                 let is_inside = intersections_to_right % 2 != 0;
 
                                 let distance =
@@ -392,9 +395,11 @@ impl MeshProcessor {
                             let point_3d = Point::new(x, y, z);
 
                             // A point is inside if it has an odd number of intersections to its right (or left).
-                            // hit_xs is sorted, so we can use partition_point for O(log N) lookup.
-                            let intersections_to_right =
-                                hit_xs.len() - hit_xs.partition_point(|&hx| hx <= x);
+                            // hit_xs is sorted and x is strictly increasing, so we use a rolling index for amortized O(1) lookup.
+                            while hit_idx < hit_xs.len() && hit_xs[hit_idx] <= x {
+                                hit_idx += 1;
+                            }
+                            let intersections_to_right = hit_xs.len() - hit_idx;
 
                             let is_inside = intersections_to_right % 2 != 0;
 
