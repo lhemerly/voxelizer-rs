@@ -1,6 +1,6 @@
 # Voxelizer-rs
 
-A high-performance, parallelized CLI tool written in Rust that converts 3D meshes (STL/OBJ) into particle clouds. 
+A high-performance, parallelized CLI tool written in Rust that converts 3D meshes (STL/OBJ) into particle clouds.
 
 ## Features
 
