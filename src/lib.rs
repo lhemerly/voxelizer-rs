@@ -37,6 +37,8 @@ pub struct TransformConfig {
     pub rotate: Option<[f64; 3]>,  // x, y, z in degrees
     pub crop: Option<[f64; 6]>,    // min_x, min_y, min_z, max_x, max_y, max_z
     pub vertex_noise: Option<f64>, // random displacement amplitude
+    pub perlin_distortion: Option<f64>,
+    pub perlin_distortion_scale: f64,
 }
 
 impl Default for TransformConfig {
@@ -48,6 +50,8 @@ impl Default for TransformConfig {
             rotate: None,
             crop: None,
             vertex_noise: None,
+            perlin_distortion: None,
+            perlin_distortion_scale: 1.0,
         }
     }
 }
@@ -123,6 +127,24 @@ impl MeshProcessor {
                 p.x += t[0];
                 p.y += t[1];
                 p.z += t[2];
+            }
+        }
+
+        #[allow(clippy::collapsible_if)]
+        if let Some(amp) = transform.perlin_distortion {
+            if amp > 0.0 {
+                let perlin_x = Perlin::new(12345);
+                let perlin_y = Perlin::new(54321);
+                let perlin_z = Perlin::new(98765);
+                let scale = transform.perlin_distortion_scale;
+                for p in &mut points {
+                    let px = p.x * scale;
+                    let py = p.y * scale;
+                    let pz = p.z * scale;
+                    p.x += perlin_x.noise(px, py, pz) * amp;
+                    p.y += perlin_y.noise(px, py, pz) * amp;
+                    p.z += perlin_z.noise(px, py, pz) * amp;
+                }
             }
         }
 
@@ -252,6 +274,7 @@ impl MeshProcessor {
         surface_only: bool,
         narrow_band: Option<f64>,
         phase_sphere: Option<[f64; 4]>,
+        fiber_perlin: Option<f64>,
     ) -> Result<Vec<ParticleData>> {
         if !resolution.is_finite() || resolution <= 1e-6 {
             anyhow::bail!(
@@ -295,6 +318,9 @@ impl MeshProcessor {
             nz,
             nx * ny * nz
         );
+
+        let perlin = Perlin::new(42);
+        let fiber_perlin_scale = fiber_perlin.unwrap_or(1.0);
 
         // We avoid collecting the entire yz cartesian product to save memory.
         // Instead we can use rayon's `into_par_iter` on a range or use flat_map across the ranges.
@@ -373,6 +399,17 @@ impl MeshProcessor {
                                             phase = 1;
                                         }
                                     }
+                                    let mut fiber_x = 0.0;
+                                    let mut fiber_y = 0.0;
+                                    if fiber_perlin.is_some() {
+                                        let px = x * fiber_perlin_scale;
+                                        let py = y * fiber_perlin_scale;
+                                        let pz = z * fiber_perlin_scale;
+                                        fiber_x = perlin.noise(px, py, pz) as f32;
+                                        fiber_y =
+                                            perlin.noise(px + 10.0, py + 10.0, pz + 10.0) as f32;
+                                    }
+
                                     local_particles.push(ParticleData {
                                         x: x as f32,
                                         y: y as f32,
@@ -380,8 +417,8 @@ impl MeshProcessor {
                                         sdf,
                                         phase,
                                         label_id: 0,
-                                        fiber_x: 0.0,
-                                        fiber_y: 0.0,
+                                        fiber_x,
+                                        fiber_y,
                                     });
                                 }
                             }
@@ -419,6 +456,16 @@ impl MeshProcessor {
                                         phase = 1;
                                     }
                                 }
+                                let mut fiber_x = 0.0;
+                                let mut fiber_y = 0.0;
+                                if fiber_perlin.is_some() {
+                                    let px = x * fiber_perlin_scale;
+                                    let py = y * fiber_perlin_scale;
+                                    let pz = z * fiber_perlin_scale;
+                                    fiber_x = perlin.noise(px, py, pz) as f32;
+                                    fiber_y = perlin.noise(px + 10.0, py + 10.0, pz + 10.0) as f32;
+                                }
+
                                 local_particles.push(ParticleData {
                                     x: x as f32,
                                     y: y as f32,
@@ -426,8 +473,8 @@ impl MeshProcessor {
                                     sdf,
                                     phase,
                                     label_id: 0,
-                                    fiber_x: 0.0,
-                                    fiber_y: 0.0,
+                                    fiber_x,
+                                    fiber_y,
                                 });
                             }
                         }
@@ -441,6 +488,104 @@ impl MeshProcessor {
         println!("Voxelization complete in {:.2?}s", duration);
 
         Ok(particles)
+    }
+}
+
+#[derive(Clone, Copy)]
+pub struct Perlin {
+    p: [usize; 512],
+}
+
+impl Perlin {
+    pub fn new(seed: u32) -> Self {
+        let mut p = [0; 512];
+        let mut permutation: Vec<usize> = (0..256).collect();
+        let mut rng = seed;
+
+        for i in (1..256).rev() {
+            rng = rng.wrapping_mul(1664525).wrapping_add(1013904223);
+            let j = (rng as usize) % (i + 1);
+            permutation.swap(i, j);
+        }
+
+        for i in 0..256 {
+            p[i] = permutation[i];
+            p[256 + i] = permutation[i];
+        }
+
+        Self { p }
+    }
+
+    fn fade(t: f64) -> f64 {
+        t * t * t * (t * (t * 6.0 - 15.0) + 10.0)
+    }
+
+    fn lerp(t: f64, a: f64, b: f64) -> f64 {
+        a + t * (b - a)
+    }
+
+    fn grad(hash: usize, x: f64, y: f64, z: f64) -> f64 {
+        let h = hash & 15;
+        let u = if h < 8 { x } else { y };
+        let v = if h < 4 {
+            y
+        } else if h == 12 || h == 14 {
+            x
+        } else {
+            z
+        };
+        (if (h & 1) == 0 { u } else { -u }) + (if (h & 2) == 0 { v } else { -v })
+    }
+
+    pub fn noise(&self, mut x: f64, mut y: f64, mut z: f64) -> f64 {
+        let x_int = x.floor() as isize & 255;
+        let y_int = y.floor() as isize & 255;
+        let z_int = z.floor() as isize & 255;
+
+        x -= x.floor();
+        y -= y.floor();
+        z -= z.floor();
+
+        let u = Self::fade(x);
+        let v = Self::fade(y);
+        let w = Self::fade(z);
+
+        let a = self.p[x_int as usize] + y_int as usize;
+        let aa = self.p[a] + z_int as usize;
+        let ab = self.p[a + 1] + z_int as usize;
+        let b = self.p[x_int as usize + 1] + y_int as usize;
+        let ba = self.p[b] + z_int as usize;
+        let bb = self.p[b + 1] + z_int as usize;
+
+        Self::lerp(
+            w,
+            Self::lerp(
+                v,
+                Self::lerp(
+                    u,
+                    Self::grad(self.p[aa], x, y, z),
+                    Self::grad(self.p[ba], x - 1.0, y, z),
+                ),
+                Self::lerp(
+                    u,
+                    Self::grad(self.p[ab], x, y - 1.0, z),
+                    Self::grad(self.p[bb], x - 1.0, y - 1.0, z),
+                ),
+            ),
+            Self::lerp(
+                v,
+                Self::lerp(
+                    u,
+                    Self::grad(self.p[aa + 1], x, y, z - 1.0),
+                    Self::grad(self.p[ba + 1], x - 1.0, y, z - 1.0),
+                ),
+                Self::lerp(
+                    u,
+                    Self::grad(self.p[ab + 1], x, y - 1.0, z - 1.0),
+                    Self::grad(self.p[bb + 1], x - 1.0, y - 1.0, z - 1.0),
+                ),
+            ),
+        )
     }
 }
 
@@ -466,7 +611,9 @@ mod tests {
         };
 
         let check_err = |res: f64| {
-            let err = processor.voxelize(res, false, None, None).unwrap_err();
+            let err = processor
+                .voxelize(res, false, None, None, None)
+                .unwrap_err();
             assert_eq!(
                 err.to_string(),
                 format!(
@@ -482,7 +629,7 @@ mod tests {
         check_err(f64::NAN);
         check_err(f64::INFINITY);
 
-        assert!(processor.voxelize(0.5, false, None, None).is_ok());
+        assert!(processor.voxelize(0.5, false, None, None, None).is_ok());
     }
 
     #[test]
@@ -504,7 +651,7 @@ mod tests {
 
         let assert_narrow_band_error = |band: f64| {
             let err = processor
-                .voxelize(0.5, false, Some(band), None)
+                .voxelize(0.5, false, Some(band), None, None)
                 .unwrap_err();
             assert_eq!(
                 err.to_string(),
@@ -520,8 +667,16 @@ mod tests {
         assert_narrow_band_error(f64::INFINITY);
         assert_narrow_band_error(f64::NEG_INFINITY);
 
-        assert!(processor.voxelize(0.5, false, Some(0.0), None).is_ok());
-        assert!(processor.voxelize(0.5, false, Some(2.0), None).is_ok());
+        assert!(
+            processor
+                .voxelize(0.5, false, Some(0.0), None, None)
+                .is_ok()
+        );
+        assert!(
+            processor
+                .voxelize(0.5, false, Some(2.0), None, None)
+                .is_ok()
+        );
     }
 
     #[test]
@@ -563,7 +718,7 @@ mod tests {
             bounds_max,
         };
 
-        let particles = processor.voxelize(0.5, false, None, None).unwrap();
+        let particles = processor.voxelize(0.5, false, None, None, None).unwrap();
         assert_eq!(
             particles.len(),
             8,

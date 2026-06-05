@@ -40,6 +40,15 @@ struct Args {
     #[arg(long)]
     vertex_noise: Option<f64>,
 
+    #[arg(long)]
+    perlin_distortion: Option<f64>,
+
+    #[arg(long, default_value_t = 1.0)]
+    perlin_distortion_scale: f64,
+
+    #[arg(long)]
+    fiber_perlin: Option<f64>,
+
     #[arg(long, value_parser = parse_vec4)]
     phase_sphere: Option<[f64; 4]>,
 
@@ -155,6 +164,8 @@ fn main() -> anyhow::Result<()> {
         rotate: args.rotate,
         crop: args.crop,
         vertex_noise: args.vertex_noise,
+        perlin_distortion: args.perlin_distortion,
+        perlin_distortion_scale: args.perlin_distortion_scale,
     };
 
     let processor = MeshProcessor::from_file(&args.input, &transform)?;
@@ -163,6 +174,7 @@ fn main() -> anyhow::Result<()> {
         args.surface_only,
         args.narrow_band,
         args.phase_sphere,
+        args.fiber_perlin,
     )?;
 
     println!("Generated {} particles.", particles.len());
