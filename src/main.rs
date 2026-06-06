@@ -45,6 +45,18 @@ struct Args {
 
     #[arg(long)]
     threads: Option<usize>,
+
+    #[arg(long, value_parser = parse_vec6)]
+    phase_box: Option<[f64; 6]>,
+
+    #[arg(long)]
+    hollow: Option<f64>,
+
+    #[arg(long)]
+    fiber: bool,
+
+    #[arg(long)]
+    heatmap: bool,
 }
 
 fn parse_vec4(s: &str) -> Result<[f64; 4], String> {
@@ -163,6 +175,9 @@ fn main() -> anyhow::Result<()> {
         args.surface_only,
         args.narrow_band,
         args.phase_sphere,
+        args.phase_box,
+        args.hollow,
+        args.fiber,
     )?;
 
     println!("Generated {} particles.", particles.len());
@@ -190,9 +205,38 @@ fn main() -> anyhow::Result<()> {
             writeln!(writer, "property float x")?;
             writeln!(writer, "property float y")?;
             writeln!(writer, "property float z")?;
+            if args.heatmap {
+                writeln!(writer, "property uchar red")?;
+                writeln!(writer, "property uchar green")?;
+                writeln!(writer, "property uchar blue")?;
+            }
             writeln!(writer, "end_header")?;
+
+            let mut min_sdf = f32::MAX;
+            let mut max_sdf = f32::MIN;
+            if args.heatmap {
+                for p in &particles {
+                    if p.sdf < min_sdf {
+                        min_sdf = p.sdf;
+                    }
+                    if p.sdf > max_sdf {
+                        max_sdf = p.sdf;
+                    }
+                }
+                if (max_sdf - min_sdf).abs() < 1e-6 {
+                    max_sdf = min_sdf + 1.0;
+                }
+            }
+
             for p in &particles {
-                writeln!(writer, "{} {} {}", p.x, p.y, p.z)?;
+                if args.heatmap {
+                    let t = (p.sdf - min_sdf) / (max_sdf - min_sdf);
+                    let r = (t * 255.0).clamp(0.0, 255.0) as u8;
+                    let b = ((1.0 - t) * 255.0).clamp(0.0, 255.0) as u8;
+                    writeln!(writer, "{} {} {} {} {} {}", p.x, p.y, p.z, r, 0, b)?;
+                } else {
+                    writeln!(writer, "{} {} {}", p.x, p.y, p.z)?;
+                }
             }
         }
         Some("vtk") => {
