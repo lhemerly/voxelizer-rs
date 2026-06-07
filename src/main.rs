@@ -43,8 +43,20 @@ struct Args {
     #[arg(long, value_parser = parse_vec4)]
     phase_sphere: Option<[f64; 4]>,
 
+    #[arg(long, value_parser = parse_vec6)]
+    phase_box: Option<[f64; 6]>,
+
+    #[arg(long)]
+    hollow: Option<f64>,
+
+    #[arg(long)]
+    fiber: bool,
+
     #[arg(long)]
     threads: Option<usize>,
+
+    #[arg(long)]
+    export_cubes: bool,
 }
 
 fn parse_vec4(s: &str) -> Result<[f64; 4], String> {
@@ -163,6 +175,9 @@ fn main() -> anyhow::Result<()> {
         args.surface_only,
         args.narrow_band,
         args.phase_sphere,
+        args.phase_box,
+        args.hollow,
+        args.fiber,
     )?;
 
     println!("Generated {} particles.", particles.len());
@@ -304,8 +319,74 @@ fn main() -> anyhow::Result<()> {
             }
         }
         Some("obj") => {
-            for p in &particles {
-                writeln!(writer, "v {} {} {}", p.x, p.y, p.z)?;
+            if args.export_cubes {
+                let hs = (args.resolution * 0.5) as f32;
+                let mut v_idx = 1;
+                for p in &particles {
+                    writeln!(writer, "v {} {} {}", p.x - hs, p.y - hs, p.z - hs)?;
+                    writeln!(writer, "v {} {} {}", p.x + hs, p.y - hs, p.z - hs)?;
+                    writeln!(writer, "v {} {} {}", p.x + hs, p.y + hs, p.z - hs)?;
+                    writeln!(writer, "v {} {} {}", p.x - hs, p.y + hs, p.z - hs)?;
+                    writeln!(writer, "v {} {} {}", p.x - hs, p.y - hs, p.z + hs)?;
+                    writeln!(writer, "v {} {} {}", p.x + hs, p.y - hs, p.z + hs)?;
+                    writeln!(writer, "v {} {} {}", p.x + hs, p.y + hs, p.z + hs)?;
+                    writeln!(writer, "v {} {} {}", p.x - hs, p.y + hs, p.z + hs)?;
+
+                    writeln!(
+                        writer,
+                        "f {} {} {} {}",
+                        v_idx,
+                        v_idx + 1,
+                        v_idx + 2,
+                        v_idx + 3
+                    )?;
+                    writeln!(
+                        writer,
+                        "f {} {} {} {}",
+                        v_idx + 4,
+                        v_idx + 7,
+                        v_idx + 6,
+                        v_idx + 5
+                    )?;
+                    writeln!(
+                        writer,
+                        "f {} {} {} {}",
+                        v_idx,
+                        v_idx + 4,
+                        v_idx + 5,
+                        v_idx + 1
+                    )?;
+                    writeln!(
+                        writer,
+                        "f {} {} {} {}",
+                        v_idx + 1,
+                        v_idx + 5,
+                        v_idx + 6,
+                        v_idx + 2
+                    )?;
+                    writeln!(
+                        writer,
+                        "f {} {} {} {}",
+                        v_idx + 2,
+                        v_idx + 6,
+                        v_idx + 7,
+                        v_idx + 3
+                    )?;
+                    writeln!(
+                        writer,
+                        "f {} {} {} {}",
+                        v_idx + 3,
+                        v_idx + 7,
+                        v_idx + 4,
+                        v_idx
+                    )?;
+
+                    v_idx += 8;
+                }
+            } else {
+                for p in &particles {
+                    writeln!(writer, "v {} {} {}", p.x, p.y, p.z)?;
+                }
             }
         }
         _ => {
