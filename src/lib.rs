@@ -252,6 +252,9 @@ impl MeshProcessor {
         surface_only: bool,
         narrow_band: Option<f64>,
         phase_sphere: Option<[f64; 4]>,
+        phase_box: Option<[f64; 6]>,
+        hollow: bool,
+        fiber: bool,
     ) -> Result<Vec<ParticleData>> {
         if !resolution.is_finite() || resolution <= 1e-6 {
             anyhow::bail!(
@@ -373,6 +376,28 @@ impl MeshProcessor {
                                             phase = 1;
                                         }
                                     }
+                                    if let Some(b) = phase_box {
+                                        if x >= b[0]
+                                            && y >= b[1]
+                                            && z >= b[2]
+                                            && x <= b[3]
+                                            && y <= b[4]
+                                            && z <= b[5]
+                                        {
+                                            phase = 1;
+                                        }
+                                    }
+
+                                    let mut fiber_x = 0.0;
+                                    let mut fiber_y = 0.0;
+                                    if fiber {
+                                        let len = (x * x + y * y).sqrt();
+                                        if len > 1e-5 {
+                                            fiber_x = (-y / len) as f32;
+                                            fiber_y = (x / len) as f32;
+                                        }
+                                    }
+
                                     local_particles.push(ParticleData {
                                         x: x as f32,
                                         y: y as f32,
@@ -380,8 +405,8 @@ impl MeshProcessor {
                                         sdf,
                                         phase,
                                         label_id: 0,
-                                        fiber_x: 0.0,
-                                        fiber_y: 0.0,
+                                        fiber_x,
+                                        fiber_y,
                                     });
                                 }
                             }
@@ -402,11 +427,15 @@ impl MeshProcessor {
                                 self.mesh.distance_to_local_point(&point_3d, false) as f32;
                             let sdf = if is_inside { -distance } else { distance };
 
-                            let keep = if let Some(band) = narrow_band {
+                            let mut keep = if let Some(band) = narrow_band {
                                 sdf.abs() <= band as f32
                             } else {
                                 sdf <= 0.0
                             };
+
+                            if hollow && sdf < -1.5 * resolution as f32 {
+                                keep = false;
+                            }
 
                             if keep {
                                 let mut phase = 0;
@@ -419,6 +448,28 @@ impl MeshProcessor {
                                         phase = 1;
                                     }
                                 }
+                                if let Some(b) = phase_box {
+                                    if x >= b[0]
+                                        && y >= b[1]
+                                        && z >= b[2]
+                                        && x <= b[3]
+                                        && y <= b[4]
+                                        && z <= b[5]
+                                    {
+                                        phase = 1;
+                                    }
+                                }
+
+                                let mut fiber_x = 0.0;
+                                let mut fiber_y = 0.0;
+                                if fiber {
+                                    let len = (x * x + y * y).sqrt();
+                                    if len > 1e-5 {
+                                        fiber_x = (-y / len) as f32;
+                                        fiber_y = (x / len) as f32;
+                                    }
+                                }
+
                                 local_particles.push(ParticleData {
                                     x: x as f32,
                                     y: y as f32,
@@ -426,8 +477,8 @@ impl MeshProcessor {
                                     sdf,
                                     phase,
                                     label_id: 0,
-                                    fiber_x: 0.0,
-                                    fiber_y: 0.0,
+                                    fiber_x,
+                                    fiber_y,
                                 });
                             }
                         }
@@ -466,7 +517,9 @@ mod tests {
         };
 
         let check_err = |res: f64| {
-            let err = processor.voxelize(res, false, None, None).unwrap_err();
+            let err = processor
+                .voxelize(res, false, None, None, None, false, false)
+                .unwrap_err();
             assert_eq!(
                 err.to_string(),
                 format!(
@@ -482,7 +535,11 @@ mod tests {
         check_err(f64::NAN);
         check_err(f64::INFINITY);
 
-        assert!(processor.voxelize(0.5, false, None, None).is_ok());
+        assert!(
+            processor
+                .voxelize(0.5, false, None, None, None, false, false)
+                .is_ok()
+        );
     }
 
     #[test]
@@ -504,7 +561,7 @@ mod tests {
 
         let assert_narrow_band_error = |band: f64| {
             let err = processor
-                .voxelize(0.5, false, Some(band), None)
+                .voxelize(0.5, false, Some(band), None, None, false, false)
                 .unwrap_err();
             assert_eq!(
                 err.to_string(),
@@ -520,8 +577,16 @@ mod tests {
         assert_narrow_band_error(f64::INFINITY);
         assert_narrow_band_error(f64::NEG_INFINITY);
 
-        assert!(processor.voxelize(0.5, false, Some(0.0), None).is_ok());
-        assert!(processor.voxelize(0.5, false, Some(2.0), None).is_ok());
+        assert!(
+            processor
+                .voxelize(0.5, false, Some(0.0), None, None, false, false)
+                .is_ok()
+        );
+        assert!(
+            processor
+                .voxelize(0.5, false, Some(2.0), None, None, false, false)
+                .is_ok()
+        );
     }
 
     #[test]
@@ -563,7 +628,9 @@ mod tests {
             bounds_max,
         };
 
-        let particles = processor.voxelize(0.5, false, None, None).unwrap();
+        let particles = processor
+            .voxelize(0.5, false, None, None, None, false, false)
+            .unwrap();
         assert_eq!(
             particles.len(),
             8,

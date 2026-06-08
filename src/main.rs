@@ -43,6 +43,21 @@ struct Args {
     #[arg(long, value_parser = parse_vec4)]
     phase_sphere: Option<[f64; 4]>,
 
+    #[arg(long, value_parser = parse_vec6)]
+    phase_box: Option<[f64; 6]>,
+
+    #[arg(long)]
+    hollow: bool,
+
+    #[arg(long)]
+    fiber: bool,
+
+    #[arg(long)]
+    ply_heatmap: bool,
+
+    #[arg(long)]
+    obj_cubes: bool,
+
     #[arg(long)]
     threads: Option<usize>,
 }
@@ -163,6 +178,9 @@ fn main() -> anyhow::Result<()> {
         args.surface_only,
         args.narrow_band,
         args.phase_sphere,
+        args.phase_box,
+        args.hollow,
+        args.fiber,
     )?;
 
     println!("Generated {} particles.", particles.len());
@@ -190,9 +208,34 @@ fn main() -> anyhow::Result<()> {
             writeln!(writer, "property float x")?;
             writeln!(writer, "property float y")?;
             writeln!(writer, "property float z")?;
+            if args.ply_heatmap {
+                writeln!(writer, "property uchar red")?;
+                writeln!(writer, "property uchar green")?;
+                writeln!(writer, "property uchar blue")?;
+            }
             writeln!(writer, "end_header")?;
             for p in &particles {
-                writeln!(writer, "{} {} {}", p.x, p.y, p.z)?;
+                if args.ply_heatmap {
+                    // Simple heatmap logic: Red for inside (-SDF), Blue for outside (+SDF), White around 0
+                    // Clamp to a range around resolution, say [-3*res, 3*res]
+                    let range = (args.resolution * 3.0) as f32;
+                    let t = (p.sdf / range).clamp(-1.0, 1.0); // -1 (inside) to 1 (outside)
+
+                    let (r, g, b) = if t < 0.0 {
+                        // Inside: Red to White
+                        let r_val = 255;
+                        let gb_val = ((1.0 + t) * 255.0) as u8; // t=-1 -> gb=0, t=0 -> gb=255
+                        (r_val, gb_val, gb_val)
+                    } else {
+                        // Outside: White to Blue
+                        let b_val = 255;
+                        let rg_val = ((1.0 - t) * 255.0) as u8; // t=1 -> rg=0, t=0 -> rg=255
+                        (rg_val, rg_val, b_val)
+                    };
+                    writeln!(writer, "{} {} {} {} {} {}", p.x, p.y, p.z, r, g, b)?;
+                } else {
+                    writeln!(writer, "{} {} {}", p.x, p.y, p.z)?;
+                }
             }
         }
         Some("vtk") => {
@@ -304,8 +347,77 @@ fn main() -> anyhow::Result<()> {
             }
         }
         Some("obj") => {
-            for p in &particles {
-                writeln!(writer, "v {} {} {}", p.x, p.y, p.z)?;
+            if args.obj_cubes {
+                let r = args.resolution as f32 * 0.5;
+                for (i, p) in particles.iter().enumerate() {
+                    let v_idx = i * 8 + 1;
+                    let x = p.x;
+                    let y = p.y;
+                    let z = p.z;
+                    // Write 8 vertices
+                    writeln!(writer, "v {} {} {}", x - r, y - r, z - r)?;
+                    writeln!(writer, "v {} {} {}", x + r, y - r, z - r)?;
+                    writeln!(writer, "v {} {} {}", x + r, y + r, z - r)?;
+                    writeln!(writer, "v {} {} {}", x - r, y + r, z - r)?;
+                    writeln!(writer, "v {} {} {}", x - r, y - r, z + r)?;
+                    writeln!(writer, "v {} {} {}", x + r, y - r, z + r)?;
+                    writeln!(writer, "v {} {} {}", x + r, y + r, z + r)?;
+                    writeln!(writer, "v {} {} {}", x - r, y + r, z + r)?;
+
+                    // Write 6 faces (quads)
+                    writeln!(
+                        writer,
+                        "f {} {} {} {}",
+                        v_idx,
+                        v_idx + 1,
+                        v_idx + 2,
+                        v_idx + 3
+                    )?; // Bottom
+                    writeln!(
+                        writer,
+                        "f {} {} {} {}",
+                        v_idx + 4,
+                        v_idx + 5,
+                        v_idx + 6,
+                        v_idx + 7
+                    )?; // Top
+                    writeln!(
+                        writer,
+                        "f {} {} {} {}",
+                        v_idx,
+                        v_idx + 1,
+                        v_idx + 5,
+                        v_idx + 4
+                    )?; // Front
+                    writeln!(
+                        writer,
+                        "f {} {} {} {}",
+                        v_idx + 3,
+                        v_idx + 2,
+                        v_idx + 6,
+                        v_idx + 7
+                    )?; // Back
+                    writeln!(
+                        writer,
+                        "f {} {} {} {}",
+                        v_idx,
+                        v_idx + 3,
+                        v_idx + 7,
+                        v_idx + 4
+                    )?; // Left
+                    writeln!(
+                        writer,
+                        "f {} {} {} {}",
+                        v_idx + 1,
+                        v_idx + 2,
+                        v_idx + 6,
+                        v_idx + 5
+                    )?; // Right
+                }
+            } else {
+                for p in &particles {
+                    writeln!(writer, "v {} {} {}", p.x, p.y, p.z)?;
+                }
             }
         }
         _ => {
