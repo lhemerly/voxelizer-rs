@@ -43,6 +43,24 @@ struct Args {
     #[arg(long, value_parser = parse_vec4)]
     phase_sphere: Option<[f64; 4]>,
 
+    #[arg(long, value_parser = parse_vec6)]
+    phase_box: Option<[f64; 6]>,
+
+    #[arg(long)]
+    hollow: Option<f64>,
+
+    #[arg(long)]
+    fiber: bool,
+
+    #[arg(long)]
+    twist: Option<f64>,
+
+    #[arg(long)]
+    taper: Option<f64>,
+
+    #[arg(long)]
+    preview: bool,
+
     #[arg(long)]
     threads: Option<usize>,
 }
@@ -155,6 +173,8 @@ fn main() -> anyhow::Result<()> {
         rotate: args.rotate,
         crop: args.crop,
         vertex_noise: args.vertex_noise,
+        twist: args.twist,
+        taper: args.taper,
     };
 
     let processor = MeshProcessor::from_file(&args.input, &transform)?;
@@ -163,9 +183,59 @@ fn main() -> anyhow::Result<()> {
         args.surface_only,
         args.narrow_band,
         args.phase_sphere,
+        args.phase_box,
+        args.hollow,
+        args.fiber,
     )?;
 
     println!("Generated {} particles.", particles.len());
+
+    if args.preview && !particles.is_empty() {
+        println!("\n=== ASCII Preview (Z-Projection) ===");
+        let mut min_x = f32::MAX;
+        let mut max_x = f32::MIN;
+        let mut min_y = f32::MAX;
+        let mut max_y = f32::MIN;
+        for p in &particles {
+            min_x = min_x.min(p.x);
+            max_x = max_x.max(p.x);
+            min_y = min_y.min(p.y);
+            max_y = max_y.max(p.y);
+        }
+        let cols = 60;
+        let rows = 30;
+        let mut grid = vec![vec![0u32; cols]; rows];
+        for p in &particles {
+            let cx = (((p.x - min_x) / (max_x - min_x).max(1e-5)) * (cols as f32 - 1.0)).round()
+                as usize;
+            let cy = (((p.y - min_y) / (max_y - min_y).max(1e-5)) * (rows as f32 - 1.0)).round()
+                as usize;
+            if cy < rows && cx < cols {
+                grid[cy][cx] += 1;
+            }
+        }
+        let chars = [' ', '.', ':', '-', '=', '+', '*', '#', '%', '@'];
+        let mut max_density = 1;
+        for r in 0..rows {
+            for c in 0..cols {
+                max_density = max_density.max(grid[r][c]);
+            }
+        }
+        for r in 0..rows {
+            let mut line = String::new();
+            for c in 0..cols {
+                let d = grid[r][c];
+                let idx = if d == 0 {
+                    0
+                } else {
+                    ((d as f32 / max_density as f32) * 9.0).ceil() as usize
+                };
+                line.push(chars[idx.min(9)]);
+            }
+            println!("{}", line);
+        }
+        println!("====================================\n");
+    }
 
     let path_out = Path::new(&args.output);
     let extension = path_out
