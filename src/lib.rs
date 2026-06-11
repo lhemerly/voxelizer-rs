@@ -337,17 +337,21 @@ impl MeshProcessor {
                         let half_res = resolution * 0.5;
                         let cuboid = Cuboid::new(Vector::new(half_res, half_res, half_res));
                         let mesh_iso = Isometry::identity();
+                        let mut hit_idx = 0;
 
                         for ix in 0..nx {
                             let x = bounds_min.x + (ix as f64 * resolution) + (resolution * 0.5);
                             let point = Point::new(x, y, z);
                             let voxel_iso = Isometry::translation(point.x, point.y, point.z);
 
+                            while hit_idx < hit_xs.len() && hit_xs[hit_idx] <= x {
+                                hit_idx += 1;
+                            }
+
                             if let Ok(true) =
                                 intersection_test(&mesh_iso, &self.mesh, &voxel_iso, &cuboid)
                             {
-                                let intersections_to_right =
-                                    hit_xs.len() - hit_xs.partition_point(|&hx| hx <= x);
+                                let intersections_to_right = hit_xs.len() - hit_idx;
                                 let is_inside = intersections_to_right % 2 != 0;
 
                                 let distance =
@@ -387,14 +391,17 @@ impl MeshProcessor {
                             }
                         }
                     } else {
+                        let mut hit_idx = 0;
                         for ix in 0..nx {
                             let x = bounds_min.x + (ix as f64 * resolution) + (resolution * 0.5);
                             let point_3d = Point::new(x, y, z);
 
+                            while hit_idx < hit_xs.len() && hit_xs[hit_idx] <= x {
+                                hit_idx += 1;
+                            }
+
                             // A point is inside if it has an odd number of intersections to its right (or left).
-                            // hit_xs is sorted, so we can use partition_point for O(log N) lookup.
-                            let intersections_to_right =
-                                hit_xs.len() - hit_xs.partition_point(|&hx| hx <= x);
+                            let intersections_to_right = hit_xs.len() - hit_idx;
 
                             let is_inside = intersections_to_right % 2 != 0;
 
