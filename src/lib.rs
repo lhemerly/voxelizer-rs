@@ -52,6 +52,33 @@ impl Default for TransformConfig {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct VoxelizeOptions {
+    pub resolution: f64,
+    pub surface_only: bool,
+    pub narrow_band: Option<f64>,
+    pub phase_sphere: Option<[f64; 4]>,
+    pub sparsify: Option<f64>,
+    pub hollow: Option<f64>,
+    pub lattice_spacing: Option<u64>,
+    pub lattice_thickness: u64,
+}
+
+impl Default for VoxelizeOptions {
+    fn default() -> Self {
+        Self {
+            resolution: 0.5,
+            surface_only: false,
+            narrow_band: None,
+            phase_sphere: None,
+            sparsify: None,
+            hollow: None,
+            lattice_spacing: None,
+            lattice_thickness: 1,
+        }
+    }
+}
+
 pub struct MeshProcessor {
     mesh: TriMesh,
     bounds_min: Point3<f64>,
@@ -246,24 +273,21 @@ impl MeshProcessor {
         Ok((points, indices))
     }
 
-    pub fn voxelize(
-        &self,
-        resolution: f64,
-        surface_only: bool,
-        narrow_band: Option<f64>,
-        phase_sphere: Option<[f64; 4]>,
-    ) -> Result<Vec<ParticleData>> {
-        if !resolution.is_finite() || resolution <= 1e-6 {
+    pub fn voxelize(&self, opts: &VoxelizeOptions) -> Result<Vec<ParticleData>> {
+        if !opts.resolution.is_finite() || opts.resolution <= 1e-6 {
             anyhow::bail!(
                 "Resolution must be a finite number greater than 1e-6 to avoid excessive resource usage or division by zero. Provided: {}",
-                resolution
+                opts.resolution
             );
         }
 
-        if narrow_band.is_some_and(|band| !band.is_finite() || band < 0.0) {
+        if opts
+            .narrow_band
+            .is_some_and(|band| !band.is_finite() || band < 0.0)
+        {
             anyhow::bail!(
                 "Narrow band must be a finite non-negative number. Provided: {}",
-                narrow_band.unwrap()
+                opts.narrow_band.unwrap()
             );
         }
 
@@ -272,7 +296,7 @@ impl MeshProcessor {
         let mut bounds_min = self.bounds_min;
         let mut bounds_max = self.bounds_max;
 
-        if let Some(band) = narrow_band {
+        if let Some(band) = opts.narrow_band {
             // Expand the evaluation bounds by the narrow_band to ensure we capture
             // exterior voxels in the required shell.
             bounds_min.x -= band;
@@ -284,9 +308,9 @@ impl MeshProcessor {
         }
 
         let size = bounds_max - bounds_min;
-        let nx = (size.x / resolution).ceil() as u64;
-        let ny = (size.y / resolution).ceil() as u64;
-        let nz = (size.z / resolution).ceil() as u64;
+        let nx = (size.x / opts.resolution).ceil() as u64;
+        let ny = (size.y / opts.resolution).ceil() as u64;
+        let nz = (size.z / opts.resolution).ceil() as u64;
 
         println!(
             "Grid Dimensions: {} x {} x {} (Potential Voxels: {})",
@@ -303,8 +327,8 @@ impl MeshProcessor {
             .flat_map(|iy| {
                 (0..nz).into_par_iter().flat_map(move |iz| {
                     let mut local_particles = Vec::with_capacity(nx as usize);
-                    let y = bounds_min.y + (iy as f64 * resolution) + (resolution * 0.5);
-                    let z = bounds_min.z + (iz as f64 * resolution) + (resolution * 0.5);
+                    let y = bounds_min.y + (iy as f64 * opts.resolution) + (opts.resolution * 0.5);
+                    let z = bounds_min.z + (iz as f64 * opts.resolution) + (opts.resolution * 0.5);
 
                     // Extract raycasting to be available for both modes so SDF sign is consistent.
                     let start_x = self.bounds_min.x - 1.0;
@@ -333,13 +357,26 @@ impl MeshProcessor {
                     // Because rays are cast along the +X direction, doing X sequentially
                     // keeps the raycast traversals in the same BVH region,
                     // while parallelizing over (Y, Z) ensures finer granularity for Rayon.
-                    if surface_only {
-                        let half_res = resolution * 0.5;
+                    if opts.surface_only {
+                        let half_res = opts.resolution * 0.5;
                         let cuboid = Cuboid::new(Vector::new(half_res, half_res, half_res));
                         let mesh_iso = Isometry::identity();
 
                         for ix in 0..nx {
-                            let x = bounds_min.x + (ix as f64 * resolution) + (resolution * 0.5);
+                            if let Some(s) = opts.sparsify {
+                                let mut seed = (ix as u32).wrapping_mul(73856093)
+                                    ^ (iy as u32).wrapping_mul(19349663)
+                                    ^ (iz as u32).wrapping_mul(83492791);
+                                seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+                                let random_val = (seed as f64) / (u32::MAX as f64);
+                                if random_val > s {
+                                    continue;
+                                }
+                            }
+
+                            let x = bounds_min.x
+                                + (ix as f64 * opts.resolution)
+                                + (opts.resolution * 0.5);
                             let point = Point::new(x, y, z);
                             let voxel_iso = Isometry::translation(point.x, point.y, point.z);
 
@@ -356,7 +393,7 @@ impl MeshProcessor {
 
                                 // Surface voxels inherently intersect the surface, so they should always be kept
                                 // if we're not using narrow_band. If narrow_band is used, we check the distance.
-                                let keep = if let Some(band) = narrow_band {
+                                let keep = if let Some(band) = opts.narrow_band {
                                     sdf.abs() <= band as f32
                                 } else {
                                     true
@@ -364,7 +401,7 @@ impl MeshProcessor {
 
                                 if keep {
                                     let mut phase = 0;
-                                    if let Some(sphere) = phase_sphere {
+                                    if let Some(sphere) = opts.phase_sphere {
                                         let dx = x - sphere[0];
                                         let dy = y - sphere[1];
                                         let dz = z - sphere[2];
@@ -388,7 +425,20 @@ impl MeshProcessor {
                         }
                     } else {
                         for ix in 0..nx {
-                            let x = bounds_min.x + (ix as f64 * resolution) + (resolution * 0.5);
+                            if let Some(s) = opts.sparsify {
+                                let mut seed = (ix as u32).wrapping_mul(73856093)
+                                    ^ (iy as u32).wrapping_mul(19349663)
+                                    ^ (iz as u32).wrapping_mul(83492791);
+                                seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+                                let random_val = (seed as f64) / (u32::MAX as f64);
+                                if random_val > s {
+                                    continue;
+                                }
+                            }
+
+                            let x = bounds_min.x
+                                + (ix as f64 * opts.resolution)
+                                + (opts.resolution * 0.5);
                             let point_3d = Point::new(x, y, z);
 
                             // A point is inside if it has an odd number of intersections to its right (or left).
@@ -402,15 +452,31 @@ impl MeshProcessor {
                                 self.mesh.distance_to_local_point(&point_3d, false) as f32;
                             let sdf = if is_inside { -distance } else { distance };
 
-                            let keep = if let Some(band) = narrow_band {
+                            let mut keep = if let Some(band) = opts.narrow_band {
                                 sdf.abs() <= band as f32
                             } else {
                                 sdf <= 0.0
                             };
 
+                            #[allow(clippy::collapsible_if)]
+                            if let Some(hollow_thickness) = opts.hollow {
+                                if sdf < -(hollow_thickness as f32) {
+                                    keep = false;
+                                }
+                            }
+
+                            if let Some(spacing) = opts.lattice_spacing {
+                                let match_x = (ix % spacing < opts.lattice_thickness) as u8;
+                                let match_y = (iy % spacing < opts.lattice_thickness) as u8;
+                                let match_z = (iz % spacing < opts.lattice_thickness) as u8;
+                                if match_x + match_y + match_z < 2 {
+                                    keep = false;
+                                }
+                            }
+
                             if keep {
                                 let mut phase = 0;
-                                if let Some(sphere) = phase_sphere {
+                                if let Some(sphere) = opts.phase_sphere {
                                     let dx = x - sphere[0];
                                     let dy = y - sphere[1];
                                     let dz = z - sphere[2];
@@ -466,7 +532,11 @@ mod tests {
         };
 
         let check_err = |res: f64| {
-            let err = processor.voxelize(res, false, None, None).unwrap_err();
+            let opts = VoxelizeOptions {
+                resolution: res,
+                ..Default::default()
+            };
+            let err = processor.voxelize(&opts).unwrap_err();
             assert_eq!(
                 err.to_string(),
                 format!(
@@ -482,7 +552,11 @@ mod tests {
         check_err(f64::NAN);
         check_err(f64::INFINITY);
 
-        assert!(processor.voxelize(0.5, false, None, None).is_ok());
+        let opts = VoxelizeOptions {
+            resolution: 0.5,
+            ..Default::default()
+        };
+        assert!(processor.voxelize(&opts).is_ok());
     }
 
     #[test]
@@ -503,9 +577,12 @@ mod tests {
         };
 
         let assert_narrow_band_error = |band: f64| {
-            let err = processor
-                .voxelize(0.5, false, Some(band), None)
-                .unwrap_err();
+            let opts = VoxelizeOptions {
+                resolution: 0.5,
+                narrow_band: Some(band),
+                ..Default::default()
+            };
+            let err = processor.voxelize(&opts).unwrap_err();
             assert_eq!(
                 err.to_string(),
                 format!(
@@ -520,8 +597,14 @@ mod tests {
         assert_narrow_band_error(f64::INFINITY);
         assert_narrow_band_error(f64::NEG_INFINITY);
 
-        assert!(processor.voxelize(0.5, false, Some(0.0), None).is_ok());
-        assert!(processor.voxelize(0.5, false, Some(2.0), None).is_ok());
+        let mut opts = VoxelizeOptions {
+            resolution: 0.5,
+            narrow_band: Some(0.0),
+            ..Default::default()
+        };
+        assert!(processor.voxelize(&opts).is_ok());
+        opts.narrow_band = Some(2.0);
+        assert!(processor.voxelize(&opts).is_ok());
     }
 
     #[test]
@@ -563,7 +646,11 @@ mod tests {
             bounds_max,
         };
 
-        let particles = processor.voxelize(0.5, false, None, None).unwrap();
+        let opts = VoxelizeOptions {
+            resolution: 0.5,
+            ..Default::default()
+        };
+        let particles = processor.voxelize(&opts).unwrap();
         assert_eq!(
             particles.len(),
             8,

@@ -44,6 +44,21 @@ struct Args {
     phase_sphere: Option<[f64; 4]>,
 
     #[arg(long)]
+    sparsify: Option<f64>,
+
+    #[arg(long)]
+    hollow: Option<f64>,
+
+    #[arg(long)]
+    lattice_spacing: Option<u64>,
+
+    #[arg(long, default_value_t = 1)]
+    lattice_thickness: u64,
+
+    #[arg(long)]
+    export_slices: Option<String>,
+
+    #[arg(long)]
     threads: Option<usize>,
 }
 
@@ -135,6 +150,74 @@ fn validate_narrow_band(s: &str) -> Result<f64, String> {
     }
 }
 
+fn export_pbm_slices(
+    particles: &[voxelizer_rs::ParticleData],
+    output_dir: &str,
+    res: f64,
+) -> anyhow::Result<()> {
+    if particles.is_empty() {
+        return Ok(());
+    }
+
+    std::fs::create_dir_all(output_dir)?;
+
+    let mut min_x = f32::MAX;
+    let mut min_y = f32::MAX;
+    let mut min_z = f32::MAX;
+    let mut max_x = f32::MIN;
+    let mut max_y = f32::MIN;
+    for p in particles {
+        min_x = min_x.min(p.x);
+        min_y = min_y.min(p.y);
+        min_z = min_z.min(p.z);
+        max_x = max_x.max(p.x);
+        max_y = max_y.max(p.y);
+    }
+
+    let res_f32 = res as f32;
+    let size_x = ((max_x - min_x) / res_f32).round() as usize + 1;
+    let size_y = ((max_y - min_y) / res_f32).round() as usize + 1;
+
+    let mut layers: std::collections::HashMap<i32, std::collections::HashSet<(usize, usize)>> =
+        std::collections::HashMap::new();
+
+    for p in particles {
+        let vx = ((p.x - min_x) / res_f32).round() as usize;
+        let vy = ((p.y - min_y) / res_f32).round() as usize;
+        let vz = ((p.z - min_z) / res_f32).round() as i32;
+
+        layers.entry(vz).or_default().insert((vx, vy));
+    }
+
+    let mut z_indices: Vec<i32> = layers.keys().copied().collect();
+    z_indices.sort_unstable();
+
+    for (layer_idx, z) in z_indices.into_iter().enumerate() {
+        let points = &layers[&z];
+        let file_path = Path::new(output_dir).join(format!("slice_{:04}.pbm", layer_idx));
+        let mut f = BufWriter::new(File::create(&file_path)?);
+
+        writeln!(f, "P1")?;
+        writeln!(f, "{} {}", size_x, size_y)?;
+
+        // PBM coordinates: y is usually from top to bottom.
+        // We'll iterate y from 0 to size_y - 1 (which corresponds to min_y to max_y)
+        for y in 0..size_y {
+            for x in 0..size_x {
+                if points.contains(&(x, y)) {
+                    write!(f, "1 ")?;
+                } else {
+                    write!(f, "0 ")?;
+                }
+            }
+            writeln!(f)?;
+        }
+    }
+
+    println!("Exported {} slices to '{}'", layers.len(), output_dir);
+    Ok(())
+}
+
 fn main() -> anyhow::Result<()> {
     let args = Args::parse();
 
@@ -157,15 +240,25 @@ fn main() -> anyhow::Result<()> {
         vertex_noise: args.vertex_noise,
     };
 
+    let opts = voxelizer_rs::VoxelizeOptions {
+        resolution: args.resolution,
+        surface_only: args.surface_only,
+        narrow_band: args.narrow_band,
+        phase_sphere: args.phase_sphere,
+        sparsify: args.sparsify,
+        hollow: args.hollow,
+        lattice_spacing: args.lattice_spacing,
+        lattice_thickness: args.lattice_thickness,
+    };
+
     let processor = MeshProcessor::from_file(&args.input, &transform)?;
-    let particles = processor.voxelize(
-        args.resolution,
-        args.surface_only,
-        args.narrow_band,
-        args.phase_sphere,
-    )?;
+    let particles = processor.voxelize(&opts)?;
 
     println!("Generated {} particles.", particles.len());
+
+    if let Some(slice_dir) = args.export_slices {
+        export_pbm_slices(&particles, &slice_dir, args.resolution)?;
+    }
 
     let path_out = Path::new(&args.output);
     let extension = path_out
