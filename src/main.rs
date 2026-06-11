@@ -43,74 +43,62 @@ struct Args {
     #[arg(long, value_parser = parse_vec4)]
     phase_sphere: Option<[f64; 4]>,
 
+    #[arg(long, value_parser = parse_vec6)]
+    phase_box: Option<[f64; 6]>,
+
+    #[arg(long)]
+    hollow: Option<f64>,
+
+    #[arg(long, value_parser = parse_vec2_f32)]
+    fiber: Option<[f32; 2]>,
+
     #[arg(long)]
     threads: Option<usize>,
 }
 
-fn parse_vec4(s: &str) -> Result<[f64; 4], String> {
+fn parse_vec<const N: usize>(s: &str) -> Result<[f64; N], String> {
     let parts: Vec<&str> = s.split(',').collect();
-    if parts.len() != 4 {
-        return Err(format!("Expected 'x,y,z,radius', got '{}'", s));
+    if parts.len() != N {
+        return Err(format!("Expected {} values, got '{}'", N, s));
     }
-    let x = parts[0]
-        .parse()
-        .map_err(|_| format!("Invalid x: {}", parts[0]))?;
-    let y = parts[1]
-        .parse()
-        .map_err(|_| format!("Invalid y: {}", parts[1]))?;
-    let z = parts[2]
-        .parse()
-        .map_err(|_| format!("Invalid z: {}", parts[2]))?;
-    let w = parts[3]
-        .parse()
-        .map_err(|_| format!("Invalid radius: {}", parts[3]))?;
-    Ok([x, y, z, w])
+    let mut arr = [0.0; N];
+    for (i, p) in parts.iter().enumerate() {
+        arr[i] = p
+            .parse()
+            .map_err(|_| format!("Invalid value at {}: {}", i, p))?;
+    }
+    Ok(arr)
+}
+
+fn parse_vec2_f32(s: &str) -> Result<[f32; 2], String> {
+    let parts: Vec<&str> = s.split(',').collect();
+    if parts.len() != 2 {
+        return Err(format!("Expected 2 values, got '{}'", s));
+    }
+    let mut arr = [0.0; 2];
+    for (i, p) in parts.iter().enumerate() {
+        arr[i] = p
+            .parse()
+            .map_err(|_| format!("Invalid value at {}: {}", i, p))?;
+    }
+    Ok(arr)
+}
+
+fn parse_vec4(s: &str) -> Result<[f64; 4], String> {
+    parse_vec(s).map_err(|_| format!("Expected 'x,y,z,radius', got '{}'", s))
 }
 
 fn parse_vec6(s: &str) -> Result<[f64; 6], String> {
-    let parts: Vec<&str> = s.split(',').collect();
-    if parts.len() != 6 {
-        return Err(format!(
+    parse_vec(s).map_err(|_| {
+        format!(
             "Expected 'min_x,min_y,min_z,max_x,max_y,max_z', got '{}'",
             s
-        ));
-    }
-    let v0 = parts[0]
-        .parse()
-        .map_err(|_| format!("Invalid value: {}", parts[0]))?;
-    let v1 = parts[1]
-        .parse()
-        .map_err(|_| format!("Invalid value: {}", parts[1]))?;
-    let v2 = parts[2]
-        .parse()
-        .map_err(|_| format!("Invalid value: {}", parts[2]))?;
-    let v3 = parts[3]
-        .parse()
-        .map_err(|_| format!("Invalid value: {}", parts[3]))?;
-    let v4 = parts[4]
-        .parse()
-        .map_err(|_| format!("Invalid value: {}", parts[4]))?;
-    let v5 = parts[5]
-        .parse()
-        .map_err(|_| format!("Invalid value: {}", parts[5]))?;
-    Ok([v0, v1, v2, v3, v4, v5])
+        )
+    })
 }
 
 fn parse_vec3(s: &str) -> Result<[f64; 3], String> {
-    let parts: Vec<&str> = s.split(',').collect();
-    if parts.len() != 3 {
-        return Err(format!("Expected 'x,y,z', got '{}'", s));
-    }
-    let x = parts[0]
-        .parse()
-        .map_err(|_| format!("Invalid x: {}", parts[0]))?;
-    let y = parts[1]
-        .parse()
-        .map_err(|_| format!("Invalid y: {}", parts[1]))?;
-    let z = parts[2]
-        .parse()
-        .map_err(|_| format!("Invalid z: {}", parts[2]))?;
-    Ok([x, y, z])
+    parse_vec(s).map_err(|_| format!("Expected 'x,y,z', got '{}'", s))
 }
 
 fn validate_resolution(s: &str) -> Result<f64, String> {
@@ -163,6 +151,9 @@ fn main() -> anyhow::Result<()> {
         args.surface_only,
         args.narrow_band,
         args.phase_sphere,
+        args.phase_box,
+        args.hollow,
+        args.fiber,
     )?;
 
     println!("Generated {} particles.", particles.len());

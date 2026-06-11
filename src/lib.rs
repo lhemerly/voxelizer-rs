@@ -252,6 +252,9 @@ impl MeshProcessor {
         surface_only: bool,
         narrow_band: Option<f64>,
         phase_sphere: Option<[f64; 4]>,
+        phase_box: Option<[f64; 6]>,
+        hollow: Option<f64>,
+        fiber: Option<[f32; 2]>,
     ) -> Result<Vec<ParticleData>> {
         if !resolution.is_finite() || resolution <= 1e-6 {
             anyhow::bail!(
@@ -333,11 +336,14 @@ impl MeshProcessor {
                     // Because rays are cast along the +X direction, doing X sequentially
                     // keeps the raycast traversals in the same BVH region,
                     // while parallelizing over (Y, Z) ensures finer granularity for Rayon.
+                    let [fx, fy] = fiber.unwrap_or([0.0, 0.0]);
+
                     if surface_only {
                         let half_res = resolution * 0.5;
                         let cuboid = Cuboid::new(Vector::new(half_res, half_res, half_res));
                         let mesh_iso = Isometry::identity();
 
+                        let mut hit_idx = 0;
                         for ix in 0..nx {
                             let x = bounds_min.x + (ix as f64 * resolution) + (resolution * 0.5);
                             let point = Point::new(x, y, z);
@@ -346,8 +352,10 @@ impl MeshProcessor {
                             if let Ok(true) =
                                 intersection_test(&mesh_iso, &self.mesh, &voxel_iso, &cuboid)
                             {
-                                let intersections_to_right =
-                                    hit_xs.len() - hit_xs.partition_point(|&hx| hx <= x);
+                                while hit_idx < hit_xs.len() && hit_xs[hit_idx] <= x {
+                                    hit_idx += 1;
+                                }
+                                let intersections_to_right = hit_xs.len() - hit_idx;
                                 let is_inside = intersections_to_right % 2 != 0;
 
                                 let distance =
@@ -373,6 +381,18 @@ impl MeshProcessor {
                                             phase = 1;
                                         }
                                     }
+                                    #[allow(clippy::collapsible_if)]
+                                    if let Some(box_coords) = phase_box {
+                                        if x >= box_coords[0]
+                                            && y >= box_coords[1]
+                                            && z >= box_coords[2]
+                                            && x <= box_coords[3]
+                                            && y <= box_coords[4]
+                                            && z <= box_coords[5]
+                                        {
+                                            phase = 1;
+                                        }
+                                    }
                                     local_particles.push(ParticleData {
                                         x: x as f32,
                                         y: y as f32,
@@ -380,22 +400,22 @@ impl MeshProcessor {
                                         sdf,
                                         phase,
                                         label_id: 0,
-                                        fiber_x: 0.0,
-                                        fiber_y: 0.0,
+                                        fiber_x: fx,
+                                        fiber_y: fy,
                                     });
                                 }
                             }
                         }
                     } else {
+                        let mut hit_idx = 0;
                         for ix in 0..nx {
                             let x = bounds_min.x + (ix as f64 * resolution) + (resolution * 0.5);
                             let point_3d = Point::new(x, y, z);
 
-                            // A point is inside if it has an odd number of intersections to its right (or left).
-                            // hit_xs is sorted, so we can use partition_point for O(log N) lookup.
-                            let intersections_to_right =
-                                hit_xs.len() - hit_xs.partition_point(|&hx| hx <= x);
-
+                            while hit_idx < hit_xs.len() && hit_xs[hit_idx] <= x {
+                                hit_idx += 1;
+                            }
+                            let intersections_to_right = hit_xs.len() - hit_idx;
                             let is_inside = intersections_to_right % 2 != 0;
 
                             let distance =
@@ -404,6 +424,8 @@ impl MeshProcessor {
 
                             let keep = if let Some(band) = narrow_band {
                                 sdf.abs() <= band as f32
+                            } else if let Some(thick) = hollow {
+                                sdf <= 0.0 && sdf >= -(thick as f32)
                             } else {
                                 sdf <= 0.0
                             };
@@ -419,6 +441,18 @@ impl MeshProcessor {
                                         phase = 1;
                                     }
                                 }
+                                #[allow(clippy::collapsible_if)]
+                                if let Some(box_coords) = phase_box {
+                                    if x >= box_coords[0]
+                                        && y >= box_coords[1]
+                                        && z >= box_coords[2]
+                                        && x <= box_coords[3]
+                                        && y <= box_coords[4]
+                                        && z <= box_coords[5]
+                                    {
+                                        phase = 1;
+                                    }
+                                }
                                 local_particles.push(ParticleData {
                                     x: x as f32,
                                     y: y as f32,
@@ -426,8 +460,8 @@ impl MeshProcessor {
                                     sdf,
                                     phase,
                                     label_id: 0,
-                                    fiber_x: 0.0,
-                                    fiber_y: 0.0,
+                                    fiber_x: fx,
+                                    fiber_y: fy,
                                 });
                             }
                         }
@@ -466,7 +500,9 @@ mod tests {
         };
 
         let check_err = |res: f64| {
-            let err = processor.voxelize(res, false, None, None).unwrap_err();
+            let err = processor
+                .voxelize(res, false, None, None, None, None, None)
+                .unwrap_err();
             assert_eq!(
                 err.to_string(),
                 format!(
@@ -482,7 +518,11 @@ mod tests {
         check_err(f64::NAN);
         check_err(f64::INFINITY);
 
-        assert!(processor.voxelize(0.5, false, None, None).is_ok());
+        assert!(
+            processor
+                .voxelize(0.5, false, None, None, None, None, None)
+                .is_ok()
+        );
     }
 
     #[test]
@@ -504,7 +544,7 @@ mod tests {
 
         let assert_narrow_band_error = |band: f64| {
             let err = processor
-                .voxelize(0.5, false, Some(band), None)
+                .voxelize(0.5, false, Some(band), None, None, None, None)
                 .unwrap_err();
             assert_eq!(
                 err.to_string(),
@@ -520,8 +560,16 @@ mod tests {
         assert_narrow_band_error(f64::INFINITY);
         assert_narrow_band_error(f64::NEG_INFINITY);
 
-        assert!(processor.voxelize(0.5, false, Some(0.0), None).is_ok());
-        assert!(processor.voxelize(0.5, false, Some(2.0), None).is_ok());
+        assert!(
+            processor
+                .voxelize(0.5, false, Some(0.0), None, None, None, None)
+                .is_ok()
+        );
+        assert!(
+            processor
+                .voxelize(0.5, false, Some(2.0), None, None, None, None)
+                .is_ok()
+        );
     }
 
     #[test]
@@ -563,7 +611,9 @@ mod tests {
             bounds_max,
         };
 
-        let particles = processor.voxelize(0.5, false, None, None).unwrap();
+        let particles = processor
+            .voxelize(0.5, false, None, None, None, None, None)
+            .unwrap();
         assert_eq!(
             particles.len(),
             8,
