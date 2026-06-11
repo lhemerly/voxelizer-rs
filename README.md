@@ -77,7 +77,7 @@ struct ParticleData {
     y: f32,
     z: f32,
     sdf: f32,
-    phase: u32, // 0 = Fluid, 1 = Wall/Solid
+    phase: u32, // 0 = Default, 1 = Inside Phase Sphere
     label_id: u32,
     fiber_x: f32,
     fiber_y: f32,
