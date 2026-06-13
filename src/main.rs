@@ -45,72 +45,33 @@ struct Args {
 
     #[arg(long)]
     threads: Option<usize>,
+
+    #[arg(long)]
+    heatmap: bool,
+}
+
+fn parse_vec<const N: usize>(s: &str) -> Result<[f64; N], String> {
+    let parts: Vec<&str> = s.split(',').collect();
+    if parts.len() != N {
+        return Err(format!("Expected {} values, got '{}'", N, s));
+    }
+    let mut res = [0.0; N];
+    for i in 0..N {
+        res[i] = parts[i]
+            .parse()
+            .map_err(|_| format!("Invalid value at index {}: {}", i, parts[i]))?;
+    }
+    Ok(res)
 }
 
 fn parse_vec4(s: &str) -> Result<[f64; 4], String> {
-    let parts: Vec<&str> = s.split(',').collect();
-    if parts.len() != 4 {
-        return Err(format!("Expected 'x,y,z,radius', got '{}'", s));
-    }
-    let x = parts[0]
-        .parse()
-        .map_err(|_| format!("Invalid x: {}", parts[0]))?;
-    let y = parts[1]
-        .parse()
-        .map_err(|_| format!("Invalid y: {}", parts[1]))?;
-    let z = parts[2]
-        .parse()
-        .map_err(|_| format!("Invalid z: {}", parts[2]))?;
-    let w = parts[3]
-        .parse()
-        .map_err(|_| format!("Invalid radius: {}", parts[3]))?;
-    Ok([x, y, z, w])
+    parse_vec(s)
 }
-
 fn parse_vec6(s: &str) -> Result<[f64; 6], String> {
-    let parts: Vec<&str> = s.split(',').collect();
-    if parts.len() != 6 {
-        return Err(format!(
-            "Expected 'min_x,min_y,min_z,max_x,max_y,max_z', got '{}'",
-            s
-        ));
-    }
-    let v0 = parts[0]
-        .parse()
-        .map_err(|_| format!("Invalid value: {}", parts[0]))?;
-    let v1 = parts[1]
-        .parse()
-        .map_err(|_| format!("Invalid value: {}", parts[1]))?;
-    let v2 = parts[2]
-        .parse()
-        .map_err(|_| format!("Invalid value: {}", parts[2]))?;
-    let v3 = parts[3]
-        .parse()
-        .map_err(|_| format!("Invalid value: {}", parts[3]))?;
-    let v4 = parts[4]
-        .parse()
-        .map_err(|_| format!("Invalid value: {}", parts[4]))?;
-    let v5 = parts[5]
-        .parse()
-        .map_err(|_| format!("Invalid value: {}", parts[5]))?;
-    Ok([v0, v1, v2, v3, v4, v5])
+    parse_vec(s)
 }
-
 fn parse_vec3(s: &str) -> Result<[f64; 3], String> {
-    let parts: Vec<&str> = s.split(',').collect();
-    if parts.len() != 3 {
-        return Err(format!("Expected 'x,y,z', got '{}'", s));
-    }
-    let x = parts[0]
-        .parse()
-        .map_err(|_| format!("Invalid x: {}", parts[0]))?;
-    let y = parts[1]
-        .parse()
-        .map_err(|_| format!("Invalid y: {}", parts[1]))?;
-    let z = parts[2]
-        .parse()
-        .map_err(|_| format!("Invalid z: {}", parts[2]))?;
-    Ok([x, y, z])
+    parse_vec(s)
 }
 
 fn validate_resolution(s: &str) -> Result<f64, String> {
@@ -190,9 +151,36 @@ fn main() -> anyhow::Result<()> {
             writeln!(writer, "property float x")?;
             writeln!(writer, "property float y")?;
             writeln!(writer, "property float z")?;
+            if args.heatmap {
+                writeln!(writer, "property uchar red")?;
+                writeln!(writer, "property uchar green")?;
+                writeln!(writer, "property uchar blue")?;
+            }
             writeln!(writer, "end_header")?;
+
+            let mut min_sdf = f32::MAX;
+            let mut max_sdf = f32::MIN;
+            if args.heatmap {
+                for p in &particles {
+                    min_sdf = min_sdf.min(p.sdf);
+                    max_sdf = max_sdf.max(p.sdf);
+                }
+            }
+
             for p in &particles {
-                writeln!(writer, "{} {} {}", p.x, p.y, p.z)?;
+                if args.heatmap {
+                    let t = if max_sdf > min_sdf {
+                        (p.sdf - min_sdf) / (max_sdf - min_sdf)
+                    } else {
+                        0.5
+                    };
+                    // Simple Red-to-Blue gradient (negative SDF is inside, let's map Red = inside/low, Blue = outside/high)
+                    let r = ((1.0 - t) * 255.0) as u8;
+                    let b = (t * 255.0) as u8;
+                    writeln!(writer, "{} {} {} {} 0 {}", p.x, p.y, p.z, r, b)?;
+                } else {
+                    writeln!(writer, "{} {} {}", p.x, p.y, p.z)?;
+                }
             }
         }
         Some("vtk") => {
