@@ -1,0 +1,41 @@
+--- src/lib.rs
++++ src/lib.rs
+@@ -348,9 +348,15 @@
+                                 let intersections_to_right =
+                                     hit_xs.len() - hit_xs.partition_point(|&hx| hx <= x);
+                                 let is_inside = intersections_to_right % 2 != 0;
+
+-                                let distance =
+-                                    self.mesh.distance_to_local_point(&point, false) as f32;
+-                                let sdf = if is_inside { -distance } else { distance };
++                                let sdf = if narrow_band.is_none() {
++                                    if is_inside {
++                                        -f32::INFINITY
++                                    } else {
++                                        f32::INFINITY
++                                    }
++                                } else {
++                                    let distance = self.mesh.distance_to_local_point(&point, false) as f32;
++                                    if is_inside { -distance } else { distance }
++                                };
+
+                                 // Surface voxels inherently intersect the surface, so they should always be kept
+@@ -399,9 +405,15 @@
+
+                             let is_inside = intersections_to_right % 2 != 0;
+
+-                            let distance =
+-                                self.mesh.distance_to_local_point(&point_3d, false) as f32;
+-                            let sdf = if is_inside { -distance } else { distance };
++                            let sdf = if narrow_band.is_none() {
++                                if is_inside {
++                                    -f32::INFINITY
++                                } else {
++                                    f32::INFINITY
++                                }
++                            } else {
++                                let distance = self.mesh.distance_to_local_point(&point_3d, false) as f32;
++                                if is_inside { -distance } else { distance }
++                            };
+
+                             let keep = if let Some(band) = narrow_band {

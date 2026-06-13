@@ -1,0 +1,23 @@
+--- src/lib.rs
++++ src/lib.rs
+@@ -348,11 +348,11 @@
+                                 let intersections_to_right =
+                                     hit_xs.len() - hit_xs.partition_point(|&hx| hx <= x);
+                                 let is_inside = intersections_to_right % 2 != 0;
+
+-                                let distance =
+-                                    self.mesh.distance_to_local_point(&point, false) as f32;
+-                                let sdf = if is_inside { -distance } else { distance };
++                                let sdf = if is_inside { -0.0 } else { 0.0 };
+
+                                 // Surface voxels inherently intersect the surface, so they should always be kept
+@@ -399,10 +399,10 @@
+
+                             let is_inside = intersections_to_right % 2 != 0;
+
+-                            let distance =
+-                                self.mesh.distance_to_local_point(&point_3d, false) as f32;
+-                            let sdf = if is_inside { -distance } else { distance };
++                            let sdf = if is_inside { -0.0 } else { 0.0 };
+
+                             let keep = if let Some(band) = narrow_band {
