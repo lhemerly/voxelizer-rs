@@ -350,9 +350,13 @@ impl MeshProcessor {
                                     hit_xs.len() - hit_xs.partition_point(|&hx| hx <= x);
                                 let is_inside = intersections_to_right % 2 != 0;
 
-                                let distance =
-                                    self.mesh.distance_to_local_point(&point, false) as f32;
-                                let sdf = if is_inside { -distance } else { distance };
+                                let sdf = if narrow_band.is_none() {
+                                    if is_inside { -1.0 } else { 1.0 }
+                                } else {
+                                    let distance =
+                                        self.mesh.distance_to_local_point(&point, false) as f32;
+                                    if is_inside { -distance } else { distance }
+                                };
 
                                 // Surface voxels inherently intersect the surface, so they should always be kept
                                 // if we're not using narrow_band. If narrow_band is used, we check the distance.
@@ -398,14 +402,13 @@ impl MeshProcessor {
 
                             let is_inside = intersections_to_right % 2 != 0;
 
-                            let distance =
-                                self.mesh.distance_to_local_point(&point_3d, false) as f32;
-                            let sdf = if is_inside { -distance } else { distance };
-
-                            let keep = if let Some(band) = narrow_band {
-                                sdf.abs() <= band as f32
+                            let (sdf, keep) = if let Some(band) = narrow_band {
+                                let distance =
+                                    self.mesh.distance_to_local_point(&point_3d, false) as f32;
+                                let sdf = if is_inside { -distance } else { distance };
+                                (sdf, sdf.abs() <= band as f32)
                             } else {
-                                sdf <= 0.0
+                                (if is_inside { -1.0 } else { 1.0 }, is_inside)
                             };
 
                             if keep {
