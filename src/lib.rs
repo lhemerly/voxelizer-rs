@@ -37,6 +37,9 @@ pub struct TransformConfig {
     pub rotate: Option<[f64; 3]>,  // x, y, z in degrees
     pub crop: Option<[f64; 6]>,    // min_x, min_y, min_z, max_x, max_y, max_z
     pub vertex_noise: Option<f64>, // random displacement amplitude
+    pub twist: Option<f64>,
+    pub taper: Option<f64>,
+    pub porosity: Option<f64>,
 }
 
 impl Default for TransformConfig {
@@ -48,6 +51,9 @@ impl Default for TransformConfig {
             rotate: None,
             crop: None,
             vertex_noise: None,
+            twist: None,
+            taper: None,
+            porosity: None,
         }
     }
 }
@@ -142,6 +148,66 @@ impl MeshProcessor {
                     p.x += rx * amp;
                     p.y += ry * amp;
                     p.z += rz * amp;
+                }
+            }
+        }
+
+        if transform.twist.is_some() || transform.taper.is_some() {
+            let mut min_y = f64::MAX;
+            let mut max_y = f64::MIN;
+            let mut sum_x = 0.0;
+            let mut sum_z = 0.0;
+            let n_points = points.len() as f64;
+
+            for p in &points {
+                min_y = min_y.min(p.y);
+                max_y = max_y.max(p.y);
+                sum_x += p.x;
+                sum_z += p.z;
+            }
+
+            let cx = if n_points > 0.0 {
+                sum_x / n_points
+            } else {
+                0.0
+            };
+            let cz = if n_points > 0.0 {
+                sum_z / n_points
+            } else {
+                0.0
+            };
+
+            let height = max_y - min_y;
+            if height > 1e-6 {
+                if let Some(twist) = transform.twist {
+                    let twist_rads = twist.to_radians();
+                    for p in &mut points {
+                        let normalized_y = (p.y - min_y) / height;
+                        let angle = normalized_y * twist_rads;
+                        let cos_a = angle.cos();
+                        let sin_a = angle.sin();
+
+                        let px = p.x - cx;
+                        let pz = p.z - cz;
+
+                        let nx = px * cos_a - pz * sin_a;
+                        let nz = px * sin_a + pz * cos_a;
+
+                        p.x = nx + cx;
+                        p.z = nz + cz;
+                    }
+                }
+                if let Some(taper) = transform.taper {
+                    for p in &mut points {
+                        let normalized_y = (p.y - min_y) / height;
+                        let scale_factor = 1.0 + (taper - 1.0) * normalized_y;
+
+                        let px = p.x - cx;
+                        let pz = p.z - cz;
+
+                        p.x = (px * scale_factor) + cx;
+                        p.z = (pz * scale_factor) + cz;
+                    }
                 }
             }
         }
@@ -252,6 +318,7 @@ impl MeshProcessor {
         surface_only: bool,
         narrow_band: Option<f64>,
         phase_sphere: Option<[f64; 4]>,
+        porosity: Option<f64>,
     ) -> Result<Vec<ParticleData>> {
         if !resolution.is_finite() || resolution <= 1e-6 {
             anyhow::bail!(
@@ -356,12 +423,24 @@ impl MeshProcessor {
 
                                 // Surface voxels inherently intersect the surface, so they should always be kept
                                 // if we're not using narrow_band. If narrow_band is used, we check the distance.
-                                let keep = if let Some(band) = narrow_band {
+                                let mut keep = if let Some(band) = narrow_band {
                                     sdf.abs() <= band as f32
                                 } else {
                                     true
                                 };
 
+                                #[allow(clippy::collapsible_if)]
+                                if keep {
+                                    if let Some(p) = porosity {
+                                        let dot = x * 12.9898 + y * 78.233 + z * 151.7182;
+                                        let hash = (dot.sin() * 43758.5453).fract().abs();
+                                        if hash < p {
+                                            keep = false;
+                                        }
+                                    }
+                                }
+
+                                #[allow(clippy::collapsible_if)]
                                 if keep {
                                     let mut phase = 0;
                                     if let Some(sphere) = phase_sphere {
@@ -402,12 +481,24 @@ impl MeshProcessor {
                                 self.mesh.distance_to_local_point(&point_3d, false) as f32;
                             let sdf = if is_inside { -distance } else { distance };
 
-                            let keep = if let Some(band) = narrow_band {
+                            let mut keep = if let Some(band) = narrow_band {
                                 sdf.abs() <= band as f32
                             } else {
                                 sdf <= 0.0
                             };
 
+                            #[allow(clippy::collapsible_if)]
+                            if keep {
+                                if let Some(p) = porosity {
+                                    let dot = x * 12.9898 + y * 78.233 + z * 151.7182;
+                                    let hash = (dot.sin() * 43758.5453).fract().abs();
+                                    if hash < p {
+                                        keep = false;
+                                    }
+                                }
+                            }
+
+                            #[allow(clippy::collapsible_if)]
                             if keep {
                                 let mut phase = 0;
                                 if let Some(sphere) = phase_sphere {
@@ -466,7 +557,9 @@ mod tests {
         };
 
         let check_err = |res: f64| {
-            let err = processor.voxelize(res, false, None, None).unwrap_err();
+            let err = processor
+                .voxelize(res, false, None, None, None)
+                .unwrap_err();
             assert_eq!(
                 err.to_string(),
                 format!(
@@ -482,7 +575,7 @@ mod tests {
         check_err(f64::NAN);
         check_err(f64::INFINITY);
 
-        assert!(processor.voxelize(0.5, false, None, None).is_ok());
+        assert!(processor.voxelize(0.5, false, None, None, None).is_ok());
     }
 
     #[test]
@@ -504,7 +597,7 @@ mod tests {
 
         let assert_narrow_band_error = |band: f64| {
             let err = processor
-                .voxelize(0.5, false, Some(band), None)
+                .voxelize(0.5, false, Some(band), None, None)
                 .unwrap_err();
             assert_eq!(
                 err.to_string(),
@@ -520,8 +613,16 @@ mod tests {
         assert_narrow_band_error(f64::INFINITY);
         assert_narrow_band_error(f64::NEG_INFINITY);
 
-        assert!(processor.voxelize(0.5, false, Some(0.0), None).is_ok());
-        assert!(processor.voxelize(0.5, false, Some(2.0), None).is_ok());
+        assert!(
+            processor
+                .voxelize(0.5, false, Some(0.0), None, None)
+                .is_ok()
+        );
+        assert!(
+            processor
+                .voxelize(0.5, false, Some(2.0), None, None)
+                .is_ok()
+        );
     }
 
     #[test]
@@ -563,7 +664,7 @@ mod tests {
             bounds_max,
         };
 
-        let particles = processor.voxelize(0.5, false, None, None).unwrap();
+        let particles = processor.voxelize(0.5, false, None, None, None).unwrap();
         assert_eq!(
             particles.len(),
             8,
