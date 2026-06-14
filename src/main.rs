@@ -45,6 +45,15 @@ struct Args {
 
     #[arg(long)]
     threads: Option<usize>,
+
+    #[arg(long)]
+    twist: Option<f64>,
+
+    #[arg(long)]
+    taper: Option<f64>,
+
+    #[arg(long)]
+    porosity: Option<f64>,
 }
 
 fn parse_vec4(s: &str) -> Result<[f64; 4], String> {
@@ -155,6 +164,9 @@ fn main() -> anyhow::Result<()> {
         rotate: args.rotate,
         crop: args.crop,
         vertex_noise: args.vertex_noise,
+        twist: args.twist,
+        taper: args.taper,
+        porosity: args.porosity,
     };
 
     let processor = MeshProcessor::from_file(&args.input, &transform)?;
@@ -163,6 +175,7 @@ fn main() -> anyhow::Result<()> {
         args.surface_only,
         args.narrow_band,
         args.phase_sphere,
+        args.porosity,
     )?;
 
     println!("Generated {} particles.", particles.len());
