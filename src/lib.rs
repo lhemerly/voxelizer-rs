@@ -252,6 +252,7 @@ impl MeshProcessor {
         surface_only: bool,
         narrow_band: Option<f64>,
         phase_sphere: Option<[f64; 4]>,
+        porosity: Option<f64>,
     ) -> Result<Vec<ParticleData>> {
         if !resolution.is_finite() || resolution <= 1e-6 {
             anyhow::bail!(
@@ -373,16 +374,21 @@ impl MeshProcessor {
                                             phase = 1;
                                         }
                                     }
-                                    local_particles.push(ParticleData {
-                                        x: x as f32,
-                                        y: y as f32,
-                                        z: z as f32,
-                                        sdf,
-                                        phase,
-                                        label_id: 0,
-                                        fiber_x: 0.0,
-                                        fiber_y: 0.0,
-                                    });
+
+                                    let dot = x * 12.9898 + y * 78.233 + z * 151.7182;
+                                    let hash = (dot.sin() * 43758.5453).fract().abs();
+                                    if porosity.is_none_or(|p| hash >= p) {
+                                        local_particles.push(ParticleData {
+                                            x: x as f32,
+                                            y: y as f32,
+                                            z: z as f32,
+                                            sdf,
+                                            phase,
+                                            label_id: 0,
+                                            fiber_x: 0.0,
+                                            fiber_y: 0.0,
+                                        });
+                                    }
                                 }
                             }
                         }
@@ -419,16 +425,21 @@ impl MeshProcessor {
                                         phase = 1;
                                     }
                                 }
-                                local_particles.push(ParticleData {
-                                    x: x as f32,
-                                    y: y as f32,
-                                    z: z as f32,
-                                    sdf,
-                                    phase,
-                                    label_id: 0,
-                                    fiber_x: 0.0,
-                                    fiber_y: 0.0,
-                                });
+
+                                let dot = x * 12.9898 + y * 78.233 + z * 151.7182;
+                                let hash = (dot.sin() * 43758.5453).fract().abs();
+                                if porosity.is_none_or(|p| hash >= p) {
+                                    local_particles.push(ParticleData {
+                                        x: x as f32,
+                                        y: y as f32,
+                                        z: z as f32,
+                                        sdf,
+                                        phase,
+                                        label_id: 0,
+                                        fiber_x: 0.0,
+                                        fiber_y: 0.0,
+                                    });
+                                }
                             }
                         }
                     }
@@ -466,7 +477,9 @@ mod tests {
         };
 
         let check_err = |res: f64| {
-            let err = processor.voxelize(res, false, None, None).unwrap_err();
+            let err = processor
+                .voxelize(res, false, None, None, None)
+                .unwrap_err();
             assert_eq!(
                 err.to_string(),
                 format!(
@@ -482,7 +495,7 @@ mod tests {
         check_err(f64::NAN);
         check_err(f64::INFINITY);
 
-        assert!(processor.voxelize(0.5, false, None, None).is_ok());
+        assert!(processor.voxelize(0.5, false, None, None, None).is_ok());
     }
 
     #[test]
@@ -504,7 +517,7 @@ mod tests {
 
         let assert_narrow_band_error = |band: f64| {
             let err = processor
-                .voxelize(0.5, false, Some(band), None)
+                .voxelize(0.5, false, Some(band), None, None)
                 .unwrap_err();
             assert_eq!(
                 err.to_string(),
@@ -520,8 +533,16 @@ mod tests {
         assert_narrow_band_error(f64::INFINITY);
         assert_narrow_band_error(f64::NEG_INFINITY);
 
-        assert!(processor.voxelize(0.5, false, Some(0.0), None).is_ok());
-        assert!(processor.voxelize(0.5, false, Some(2.0), None).is_ok());
+        assert!(
+            processor
+                .voxelize(0.5, false, Some(0.0), None, None)
+                .is_ok()
+        );
+        assert!(
+            processor
+                .voxelize(0.5, false, Some(2.0), None, None)
+                .is_ok()
+        );
     }
 
     #[test]
@@ -563,7 +584,7 @@ mod tests {
             bounds_max,
         };
 
-        let particles = processor.voxelize(0.5, false, None, None).unwrap();
+        let particles = processor.voxelize(0.5, false, None, None, None).unwrap();
         assert_eq!(
             particles.len(),
             8,
@@ -575,6 +596,61 @@ mod tests {
             assert!(p.y == 0.25 || p.y == 0.75);
             assert!(p.z == 0.25 || p.z == 0.75);
         }
+    }
+
+    #[test]
+    fn test_voxelize_porosity() {
+        let points = vec![
+            Point::new(0.0, 0.0, 0.0),
+            Point::new(10.0, 0.0, 0.0),
+            Point::new(10.0, 10.0, 0.0),
+            Point::new(0.0, 10.0, 0.0),
+            Point::new(0.0, 0.0, 10.0),
+            Point::new(10.0, 0.0, 10.0),
+            Point::new(10.0, 10.0, 10.0),
+            Point::new(0.0, 10.0, 10.0),
+        ];
+
+        let indices = vec![
+            [0, 1, 2],
+            [0, 2, 3], // Front
+            [5, 4, 7],
+            [5, 7, 6], // Back
+            [4, 5, 1],
+            [4, 1, 0], // Bottom
+            [3, 2, 6],
+            [3, 6, 7], // Top
+            [4, 0, 3],
+            [4, 3, 7], // Left
+            [1, 5, 6],
+            [1, 6, 2], // Right
+        ];
+
+        let mesh = TriMesh::new(points, indices);
+        let aabb = mesh.local_aabb();
+        let bounds_min = aabb.mins;
+        let bounds_max = aabb.maxs;
+
+        let processor = MeshProcessor {
+            mesh,
+            bounds_min,
+            bounds_max,
+        };
+
+        let particles_full = processor.voxelize(0.5, false, None, None, None).unwrap();
+        let particles_porous = processor
+            .voxelize(0.5, false, None, None, Some(0.5))
+            .unwrap();
+
+        assert!(particles_full.len() > 0);
+        assert!(particles_porous.len() > 0);
+
+        let ratio = particles_porous.len() as f64 / particles_full.len() as f64;
+        assert!(
+            ratio > 0.4 && ratio < 0.6,
+            "Porosity of 0.5 should result in ~50% particles, got ratio {}",
+            ratio
+        );
     }
 
     #[test]

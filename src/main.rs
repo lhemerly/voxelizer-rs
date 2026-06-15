@@ -45,6 +45,20 @@ struct Args {
 
     #[arg(long)]
     threads: Option<usize>,
+
+    #[arg(long, value_parser = validate_porosity)]
+    porosity: Option<f64>,
+}
+
+fn validate_porosity(s: &str) -> Result<f64, String> {
+    let val: f64 = s.parse().map_err(|_| format!("`{s}` isn't a number"))?;
+    if (0.0..=1.0).contains(&val) {
+        Ok(val)
+    } else {
+        Err(format!(
+            "Porosity must be between 0.0 and 1.0. Provided: {s}"
+        ))
+    }
 }
 
 fn parse_vec4(s: &str) -> Result<[f64; 4], String> {
@@ -163,6 +177,7 @@ fn main() -> anyhow::Result<()> {
         args.surface_only,
         args.narrow_band,
         args.phase_sphere,
+        args.porosity,
     )?;
 
     println!("Generated {} particles.", particles.len());
