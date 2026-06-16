@@ -43,6 +43,9 @@ struct Args {
     #[arg(long, value_parser = parse_vec4)]
     phase_sphere: Option<[f64; 4]>,
 
+    #[arg(long, value_parser = validate_porosity)]
+    porosity: Option<f64>,
+
     #[arg(long)]
     threads: Option<usize>,
 }
@@ -124,6 +127,17 @@ fn validate_resolution(s: &str) -> Result<f64, String> {
     }
 }
 
+fn validate_porosity(s: &str) -> Result<f64, String> {
+    let val: f64 = s.parse().map_err(|_| format!("`{s}` isn't a number"))?;
+    if val.is_finite() && (0.0..=1.0).contains(&val) {
+        Ok(val)
+    } else {
+        Err(format!(
+            "Porosity must be a finite number between 0.0 and 1.0. Provided: {s}"
+        ))
+    }
+}
+
 fn validate_narrow_band(s: &str) -> Result<f64, String> {
     let val: f64 = s.parse().map_err(|_| format!("`{s}` isn't a number"))?;
     if val.is_finite() && val >= 0.0 {
@@ -163,6 +177,7 @@ fn main() -> anyhow::Result<()> {
         args.surface_only,
         args.narrow_band,
         args.phase_sphere,
+        args.porosity,
     )?;
 
     println!("Generated {} particles.", particles.len());
