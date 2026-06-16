@@ -246,12 +246,16 @@ impl MeshProcessor {
         Ok((points, indices))
     }
 
+#[allow(clippy::too_many_arguments)]
     pub fn voxelize(
         &self,
         resolution: f64,
         surface_only: bool,
         narrow_band: Option<f64>,
         phase_sphere: Option<[f64; 4]>,
+        phase_grid: Option<f64>,
+        porosity: Option<f64>,
+        fiber: Option<[f64; 2]>,
     ) -> Result<Vec<ParticleData>> {
         if !resolution.is_finite() || resolution <= 1e-6 {
             anyhow::bail!(
@@ -363,26 +367,53 @@ impl MeshProcessor {
                                 };
 
                                 if keep {
-                                    let mut phase = 0;
-                                    if let Some(sphere) = phase_sphere {
-                                        let dx = x - sphere[0];
-                                        let dy = y - sphere[1];
-                                        let dz = z - sphere[2];
-                                        let r2 = sphere[3] * sphere[3];
-                                        if dx * dx + dy * dy + dz * dz <= r2 {
-                                            phase = 1;
+                                    let mut skip = false;
+                                    #[allow(clippy::collapsible_if)]
+                                    if let Some(poro) = porosity {
+                                        if poro > 0.0 {
+                                            let dot = x * 12.9898 + y * 78.233 + z * 151.7182;
+                                            let hash = (dot.sin() * 43758.5453).fract().abs();
+                                            if hash < poro {
+                                                skip = true;
+                                            }
                                         }
                                     }
-                                    local_particles.push(ParticleData {
-                                        x: x as f32,
-                                        y: y as f32,
-                                        z: z as f32,
-                                        sdf,
-                                        phase,
-                                        label_id: 0,
-                                        fiber_x: 0.0,
-                                        fiber_y: 0.0,
-                                    });
+
+                                    if !skip {
+                                        let mut phase = 0;
+                                        if let Some(spacing) = phase_grid {
+                                            let gx = (x / spacing).floor() as i64;
+                                            let gy = (y / spacing).floor() as i64;
+                                            let gz = (z / spacing).floor() as i64;
+                                            if (gx + gy + gz) % 2 == 0 {
+                                                phase = 1;
+                                            }
+                                        } else if let Some(sphere) = phase_sphere {
+                                            let dx = x - sphere[0];
+                                            let dy = y - sphere[1];
+                                            let dz = z - sphere[2];
+                                            let r2 = sphere[3] * sphere[3];
+                                            if dx * dx + dy * dy + dz * dz <= r2 {
+                                                phase = 1;
+                                            }
+                                        }
+
+                                        let (fiber_x, fiber_y) = match fiber {
+                                            Some(f) => (f[0] as f32, f[1] as f32),
+                                            None => (0.0, 0.0),
+                                        };
+
+                                        local_particles.push(ParticleData {
+                                            x: x as f32,
+                                            y: y as f32,
+                                            z: z as f32,
+                                            sdf,
+                                            phase,
+                                            label_id: 0,
+                                            fiber_x,
+                                            fiber_y,
+                                        });
+                                    }
                                 }
                             }
                         }
@@ -409,26 +440,53 @@ impl MeshProcessor {
                             };
 
                             if keep {
-                                let mut phase = 0;
-                                if let Some(sphere) = phase_sphere {
-                                    let dx = x - sphere[0];
-                                    let dy = y - sphere[1];
-                                    let dz = z - sphere[2];
-                                    let r2 = sphere[3] * sphere[3];
-                                    if dx * dx + dy * dy + dz * dz <= r2 {
-                                        phase = 1;
+                                #[allow(clippy::collapsible_if)]
+                                let mut skip = false;
+                                if let Some(poro) = porosity {
+                                    if poro > 0.0 {
+                                        let dot = x * 12.9898 + y * 78.233 + z * 151.7182;
+                                        let hash = (dot.sin() * 43758.5453).fract().abs();
+                                        if hash < poro {
+                                            skip = true;
+                                        }
                                     }
                                 }
-                                local_particles.push(ParticleData {
-                                    x: x as f32,
-                                    y: y as f32,
-                                    z: z as f32,
-                                    sdf,
-                                    phase,
-                                    label_id: 0,
-                                    fiber_x: 0.0,
-                                    fiber_y: 0.0,
-                                });
+
+                                if !skip {
+                                    let mut phase = 0;
+                                    if let Some(spacing) = phase_grid {
+                                        let gx = (x / spacing).floor() as i64;
+                                        let gy = (y / spacing).floor() as i64;
+                                        let gz = (z / spacing).floor() as i64;
+                                        if (gx + gy + gz) % 2 == 0 {
+                                            phase = 1;
+                                        }
+                                    } else if let Some(sphere) = phase_sphere {
+                                        let dx = x - sphere[0];
+                                        let dy = y - sphere[1];
+                                        let dz = z - sphere[2];
+                                        let r2 = sphere[3] * sphere[3];
+                                        if dx * dx + dy * dy + dz * dz <= r2 {
+                                            phase = 1;
+                                        }
+                                    }
+
+                                    let (fiber_x, fiber_y) = match fiber {
+                                        Some(f) => (f[0] as f32, f[1] as f32),
+                                        None => (0.0, 0.0),
+                                    };
+
+                                    local_particles.push(ParticleData {
+                                        x: x as f32,
+                                        y: y as f32,
+                                        z: z as f32,
+                                        sdf,
+                                        phase,
+                                        label_id: 0,
+                                        fiber_x,
+                                        fiber_y,
+                                    });
+                                }
                             }
                         }
                     }
@@ -449,6 +507,78 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_voxelize_porosity() {
+        let points = vec![
+            Point::new(0.0, 0.0, 0.0),
+            Point::new(10.0, 0.0, 0.0),
+            Point::new(10.0, 10.0, 0.0),
+            Point::new(0.0, 10.0, 0.0),
+            Point::new(0.0, 0.0, 10.0),
+            Point::new(10.0, 0.0, 10.0),
+            Point::new(10.0, 10.0, 10.0),
+            Point::new(0.0, 10.0, 10.0),
+        ];
+
+        let indices = vec![
+            [0, 1, 2], [0, 2, 3], [5, 4, 7], [5, 7, 6],
+            [4, 5, 1], [4, 1, 0], [3, 2, 6], [3, 6, 7],
+            [4, 0, 3], [4, 3, 7], [1, 5, 6], [1, 6, 2],
+        ];
+
+        let mesh = TriMesh::new(points, indices);
+        let bounds_min = Point3::new(0.0, 0.0, 0.0);
+        let bounds_max = Point3::new(10.0, 10.0, 10.0);
+        let processor = MeshProcessor { mesh, bounds_min, bounds_max };
+
+        let full_particles = processor.voxelize(1.0, false, None, None, None, None, None).unwrap();
+        let porous_particles = processor.voxelize(1.0, false, None, None, None, Some(0.5), None).unwrap();
+
+        assert!(porous_particles.len() < full_particles.len());
+        assert!(porous_particles.len() > 0);
+    }
+
+    #[test]
+    fn test_voxelize_fiber_and_phase_grid() {
+        let points = vec![
+            Point::new(0.0, 0.0, 0.0),
+            Point::new(10.0, 0.0, 0.0),
+            Point::new(10.0, 10.0, 0.0),
+            Point::new(0.0, 10.0, 0.0),
+            Point::new(0.0, 0.0, 10.0),
+            Point::new(10.0, 0.0, 10.0),
+            Point::new(10.0, 10.0, 10.0),
+            Point::new(0.0, 10.0, 10.0),
+        ];
+
+        let indices = vec![
+            [0, 1, 2], [0, 2, 3], [5, 4, 7], [5, 7, 6],
+            [4, 5, 1], [4, 1, 0], [3, 2, 6], [3, 6, 7],
+            [4, 0, 3], [4, 3, 7], [1, 5, 6], [1, 6, 2],
+        ];
+
+        let mesh = TriMesh::new(points, indices);
+        let bounds_min = Point3::new(0.0, 0.0, 0.0);
+        let bounds_max = Point3::new(10.0, 10.0, 10.0);
+        let processor = MeshProcessor { mesh, bounds_min, bounds_max };
+
+        let particles = processor.voxelize(1.0, false, None, None, Some(5.0), None, Some([1.2, 3.4])).unwrap();
+
+        let mut has_phase_1 = false;
+        let mut has_phase_0 = false;
+
+        for p in particles {
+            assert_eq!(p.fiber_x, 1.2);
+            assert_eq!(p.fiber_y, 3.4);
+            if p.phase == 1 { has_phase_1 = true; }
+            if p.phase == 0 { has_phase_0 = true; }
+        }
+
+        assert!(has_phase_1);
+        assert!(has_phase_0);
+    }
+
+
+    #[test]
     fn test_voxelize_invalid_resolution() {
         let points = vec![
             Point::new(0.0, 0.0, 0.0),
@@ -466,7 +596,9 @@ mod tests {
         };
 
         let check_err = |res: f64| {
-            let err = processor.voxelize(res, false, None, None).unwrap_err();
+            let err = processor
+                .voxelize(res, false, None, None, None, None, None)
+                .unwrap_err();
             assert_eq!(
                 err.to_string(),
                 format!(
@@ -482,7 +614,11 @@ mod tests {
         check_err(f64::NAN);
         check_err(f64::INFINITY);
 
-        assert!(processor.voxelize(0.5, false, None, None).is_ok());
+        assert!(
+            processor
+                .voxelize(0.5, false, None, None, None, None, None)
+                .is_ok()
+        );
     }
 
     #[test]
@@ -504,7 +640,7 @@ mod tests {
 
         let assert_narrow_band_error = |band: f64| {
             let err = processor
-                .voxelize(0.5, false, Some(band), None)
+                .voxelize(0.5, false, Some(band), None, None, None, None)
                 .unwrap_err();
             assert_eq!(
                 err.to_string(),
@@ -520,8 +656,16 @@ mod tests {
         assert_narrow_band_error(f64::INFINITY);
         assert_narrow_band_error(f64::NEG_INFINITY);
 
-        assert!(processor.voxelize(0.5, false, Some(0.0), None).is_ok());
-        assert!(processor.voxelize(0.5, false, Some(2.0), None).is_ok());
+        assert!(
+            processor
+                .voxelize(0.5, false, Some(0.0), None, None, None, None)
+                .is_ok()
+        );
+        assert!(
+            processor
+                .voxelize(0.5, false, Some(2.0), None, None, None, None)
+                .is_ok()
+        );
     }
 
     #[test]
@@ -563,7 +707,9 @@ mod tests {
             bounds_max,
         };
 
-        let particles = processor.voxelize(0.5, false, None, None).unwrap();
+        let particles = processor
+            .voxelize(0.5, false, None, None, None, None, None)
+            .unwrap();
         assert_eq!(
             particles.len(),
             8,

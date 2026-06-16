@@ -7,110 +7,102 @@ use voxelizer_rs::{MeshProcessor, ParticleHeader, TransformConfig};
 #[derive(Parser, Debug)]
 #[command(author, version, about = "Voxelizer")]
 struct Args {
+    /// Path to source mesh (.stl, .obj).
     #[arg(short, long)]
     input: String,
 
+    /// Path to destination file (.csv, .ply, .vtk, .obj, .vox, .bin).
     #[arg(short, long)]
     output: String,
 
+    /// Voxel size in mesh units.
     #[arg(short, long, default_value_t = 0.5, value_parser = validate_resolution)]
     resolution: f64,
 
+    /// If provided, only surface voxels are generated.
     #[arg(long)]
     surface_only: bool,
 
+    /// Retain only voxels within this distance from the surface.
     #[arg(long, value_parser = validate_narrow_band)]
     narrow_band: Option<f64>,
 
+    /// Scale multiplier for the mesh dimensions.
     #[arg(long, default_value_t = 1.0)]
     scale: f64,
 
+    /// Center the mesh at the origin (0, 0, 0).
     #[arg(long)]
     center: bool,
 
+    /// Translate the mesh by 'x,y,z' offsets.
     #[arg(long, value_parser = parse_vec3)]
     translate: Option<[f64; 3]>,
 
+    /// Rotate the mesh by 'x,y,z' degrees.
     #[arg(long, value_parser = parse_vec3)]
     rotate: Option<[f64; 3]>,
 
+    /// Crop the mesh to 'min_x,min_y,min_z,max_x,max_y,max_z'.
     #[arg(long, value_parser = parse_vec6)]
     crop: Option<[f64; 6]>,
 
+    /// Add random displacement noise to vertices with this amplitude.
     #[arg(long)]
     vertex_noise: Option<f64>,
 
+    /// Assign phase=1 inside a sphere defined by 'x,y,z,radius'.
     #[arg(long, value_parser = parse_vec4)]
     phase_sphere: Option<[f64; 4]>,
 
+    /// Assign phase=1 in an alternating 3D checkerboard grid with this spacing.
+    #[arg(long)]
+    phase_grid: Option<f64>,
+
+    /// Fraction of voxels to drop randomly for a porous effect (0.0 to 1.0).
+    #[arg(long)]
+    porosity: Option<f64>,
+
+    /// Assign fiber orientation 'x,y' to all generated particles.
+    #[arg(long, value_parser = parse_vec2)]
+    fiber: Option<[f64; 2]>,
+
+    /// Number of parallel threads to use. Defaults to system logical cores.
     #[arg(long)]
     threads: Option<usize>,
 }
 
-fn parse_vec4(s: &str) -> Result<[f64; 4], String> {
+fn parse_vec<const N: usize>(s: &str) -> Result<[f64; N], String> {
     let parts: Vec<&str> = s.split(',').collect();
-    if parts.len() != 4 {
-        return Err(format!("Expected 'x,y,z,radius', got '{}'", s));
-    }
-    let x = parts[0]
-        .parse()
-        .map_err(|_| format!("Invalid x: {}", parts[0]))?;
-    let y = parts[1]
-        .parse()
-        .map_err(|_| format!("Invalid y: {}", parts[1]))?;
-    let z = parts[2]
-        .parse()
-        .map_err(|_| format!("Invalid z: {}", parts[2]))?;
-    let w = parts[3]
-        .parse()
-        .map_err(|_| format!("Invalid radius: {}", parts[3]))?;
-    Ok([x, y, z, w])
-}
-
-fn parse_vec6(s: &str) -> Result<[f64; 6], String> {
-    let parts: Vec<&str> = s.split(',').collect();
-    if parts.len() != 6 {
+    if parts.len() != N {
         return Err(format!(
-            "Expected 'min_x,min_y,min_z,max_x,max_y,max_z', got '{}'",
-            s
+            "Expected {} comma-separated values, got '{}'",
+            N, s
         ));
     }
-    let v0 = parts[0]
-        .parse()
-        .map_err(|_| format!("Invalid value: {}", parts[0]))?;
-    let v1 = parts[1]
-        .parse()
-        .map_err(|_| format!("Invalid value: {}", parts[1]))?;
-    let v2 = parts[2]
-        .parse()
-        .map_err(|_| format!("Invalid value: {}", parts[2]))?;
-    let v3 = parts[3]
-        .parse()
-        .map_err(|_| format!("Invalid value: {}", parts[3]))?;
-    let v4 = parts[4]
-        .parse()
-        .map_err(|_| format!("Invalid value: {}", parts[4]))?;
-    let v5 = parts[5]
-        .parse()
-        .map_err(|_| format!("Invalid value: {}", parts[5]))?;
-    Ok([v0, v1, v2, v3, v4, v5])
+    let mut arr = [0.0; N];
+    for (i, part) in parts.iter().enumerate() {
+        arr[i] = part
+            .parse()
+            .map_err(|_| format!("Invalid value at index {}: {}", i, part))?;
+    }
+    Ok(arr)
+}
+
+fn parse_vec2(s: &str) -> Result<[f64; 2], String> {
+    parse_vec::<2>(s)
 }
 
 fn parse_vec3(s: &str) -> Result<[f64; 3], String> {
-    let parts: Vec<&str> = s.split(',').collect();
-    if parts.len() != 3 {
-        return Err(format!("Expected 'x,y,z', got '{}'", s));
-    }
-    let x = parts[0]
-        .parse()
-        .map_err(|_| format!("Invalid x: {}", parts[0]))?;
-    let y = parts[1]
-        .parse()
-        .map_err(|_| format!("Invalid y: {}", parts[1]))?;
-    let z = parts[2]
-        .parse()
-        .map_err(|_| format!("Invalid z: {}", parts[2]))?;
-    Ok([x, y, z])
+    parse_vec::<3>(s)
+}
+
+fn parse_vec4(s: &str) -> Result<[f64; 4], String> {
+    parse_vec::<4>(s)
+}
+
+fn parse_vec6(s: &str) -> Result<[f64; 6], String> {
+    parse_vec::<6>(s)
 }
 
 fn validate_resolution(s: &str) -> Result<f64, String> {
@@ -163,6 +155,9 @@ fn main() -> anyhow::Result<()> {
         args.surface_only,
         args.narrow_band,
         args.phase_sphere,
+        args.phase_grid,
+        args.porosity,
+        args.fiber,
     )?;
 
     println!("Generated {} particles.", particles.len());
