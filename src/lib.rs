@@ -252,6 +252,7 @@ impl MeshProcessor {
         surface_only: bool,
         narrow_band: Option<f64>,
         phase_sphere: Option<[f64; 4]>,
+        phase_cuboid: Option<[f64; 6]>,
     ) -> Result<Vec<ParticleData>> {
         if !resolution.is_finite() || resolution <= 1e-6 {
             anyhow::bail!(
@@ -373,6 +374,18 @@ impl MeshProcessor {
                                             phase = 1;
                                         }
                                     }
+                                    #[allow(clippy::collapsible_if)]
+                                    if let Some(cuboid) = phase_cuboid {
+                                        if x >= cuboid[0]
+                                            && y >= cuboid[1]
+                                            && z >= cuboid[2]
+                                            && x <= cuboid[3]
+                                            && y <= cuboid[4]
+                                            && z <= cuboid[5]
+                                        {
+                                            phase = 1;
+                                        }
+                                    }
                                     local_particles.push(ParticleData {
                                         x: x as f32,
                                         y: y as f32,
@@ -416,6 +429,18 @@ impl MeshProcessor {
                                     let dz = z - sphere[2];
                                     let r2 = sphere[3] * sphere[3];
                                     if dx * dx + dy * dy + dz * dz <= r2 {
+                                        phase = 1;
+                                    }
+                                }
+                                #[allow(clippy::collapsible_if)]
+                                if let Some(cuboid) = phase_cuboid {
+                                    if x >= cuboid[0]
+                                        && y >= cuboid[1]
+                                        && z >= cuboid[2]
+                                        && x <= cuboid[3]
+                                        && y <= cuboid[4]
+                                        && z <= cuboid[5]
+                                    {
                                         phase = 1;
                                     }
                                 }
@@ -466,7 +491,9 @@ mod tests {
         };
 
         let check_err = |res: f64| {
-            let err = processor.voxelize(res, false, None, None).unwrap_err();
+            let err = processor
+                .voxelize(res, false, None, None, None)
+                .unwrap_err();
             assert_eq!(
                 err.to_string(),
                 format!(
@@ -482,7 +509,7 @@ mod tests {
         check_err(f64::NAN);
         check_err(f64::INFINITY);
 
-        assert!(processor.voxelize(0.5, false, None, None).is_ok());
+        assert!(processor.voxelize(0.5, false, None, None, None).is_ok());
     }
 
     #[test]
@@ -504,7 +531,7 @@ mod tests {
 
         let assert_narrow_band_error = |band: f64| {
             let err = processor
-                .voxelize(0.5, false, Some(band), None)
+                .voxelize(0.5, false, Some(band), None, None)
                 .unwrap_err();
             assert_eq!(
                 err.to_string(),
@@ -520,8 +547,16 @@ mod tests {
         assert_narrow_band_error(f64::INFINITY);
         assert_narrow_band_error(f64::NEG_INFINITY);
 
-        assert!(processor.voxelize(0.5, false, Some(0.0), None).is_ok());
-        assert!(processor.voxelize(0.5, false, Some(2.0), None).is_ok());
+        assert!(
+            processor
+                .voxelize(0.5, false, Some(0.0), None, None)
+                .is_ok()
+        );
+        assert!(
+            processor
+                .voxelize(0.5, false, Some(2.0), None, None)
+                .is_ok()
+        );
     }
 
     #[test]
@@ -563,7 +598,7 @@ mod tests {
             bounds_max,
         };
 
-        let particles = processor.voxelize(0.5, false, None, None).unwrap();
+        let particles = processor.voxelize(0.5, false, None, None, None).unwrap();
         assert_eq!(
             particles.len(),
             8,
