@@ -51,6 +51,8 @@ Arguments:
 
 ``` --phase-sphere ```: Specify a sphere for assigning a phase 'x,y,z,radius' (e.g., `--phase-sphere 0,0,0,5`).
 
+``` --phase-cuboid ```: Specify a cuboid for assigning a phase 'min_x,min_y,min_z,max_x,max_y,max_z' (e.g., `--phase-cuboid -10,-10,-10,10,10,10`).
+
 ``` --threads ```: Number of parallel threads to use. Defaults to the system's logical core count.
 
 ## Binary Format Specification
