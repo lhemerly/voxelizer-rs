@@ -252,6 +252,8 @@ impl MeshProcessor {
         surface_only: bool,
         narrow_band: Option<f64>,
         phase_sphere: Option<[f64; 4]>,
+        phase_cuboid: Option<[f64; 6]>,
+        porosity: Option<f64>,
     ) -> Result<Vec<ParticleData>> {
         if !resolution.is_finite() || resolution <= 1e-6 {
             anyhow::bail!(
@@ -373,16 +375,37 @@ impl MeshProcessor {
                                             phase = 1;
                                         }
                                     }
-                                    local_particles.push(ParticleData {
-                                        x: x as f32,
-                                        y: y as f32,
-                                        z: z as f32,
-                                        sdf,
-                                        phase,
-                                        label_id: 0,
-                                        fiber_x: 0.0,
-                                        fiber_y: 0.0,
-                                    });
+                                    if let Some(cuboid) = phase_cuboid {
+                                        if x >= cuboid[0]
+                                            && y >= cuboid[1]
+                                            && z >= cuboid[2]
+                                            && x <= cuboid[3]
+                                            && y <= cuboid[4]
+                                            && z <= cuboid[5]
+                                        {
+                                            phase = 1;
+                                        }
+                                    }
+                                    let mut skip = false;
+                                    if let Some(poro) = porosity {
+                                        let dot = x * 12.9898 + y * 78.233 + z * 151.7182;
+                                        let hash = (dot.sin() * 43758.5453).fract().abs();
+                                        if hash < poro {
+                                            skip = true;
+                                        }
+                                    }
+                                    if !skip {
+                                        local_particles.push(ParticleData {
+                                            x: x as f32,
+                                            y: y as f32,
+                                            z: z as f32,
+                                            sdf,
+                                            phase,
+                                            label_id: 0,
+                                            fiber_x: 0.0,
+                                            fiber_y: 0.0,
+                                        });
+                                    }
                                 }
                             }
                         }
@@ -419,16 +442,37 @@ impl MeshProcessor {
                                         phase = 1;
                                     }
                                 }
-                                local_particles.push(ParticleData {
-                                    x: x as f32,
-                                    y: y as f32,
-                                    z: z as f32,
-                                    sdf,
-                                    phase,
-                                    label_id: 0,
-                                    fiber_x: 0.0,
-                                    fiber_y: 0.0,
-                                });
+                                if let Some(cuboid) = phase_cuboid {
+                                    if x >= cuboid[0]
+                                        && y >= cuboid[1]
+                                        && z >= cuboid[2]
+                                        && x <= cuboid[3]
+                                        && y <= cuboid[4]
+                                        && z <= cuboid[5]
+                                    {
+                                        phase = 1;
+                                    }
+                                }
+                                let mut skip = false;
+                                if let Some(poro) = porosity {
+                                    let dot = x * 12.9898 + y * 78.233 + z * 151.7182;
+                                    let hash = (dot.sin() * 43758.5453).fract().abs();
+                                    if hash < poro {
+                                        skip = true;
+                                    }
+                                }
+                                if !skip {
+                                    local_particles.push(ParticleData {
+                                        x: x as f32,
+                                        y: y as f32,
+                                        z: z as f32,
+                                        sdf,
+                                        phase,
+                                        label_id: 0,
+                                        fiber_x: 0.0,
+                                        fiber_y: 0.0,
+                                    });
+                                }
                             }
                         }
                     }
@@ -466,7 +510,9 @@ mod tests {
         };
 
         let check_err = |res: f64| {
-            let err = processor.voxelize(res, false, None, None).unwrap_err();
+            let err = processor
+                .voxelize(res, false, None, None, None, None)
+                .unwrap_err();
             assert_eq!(
                 err.to_string(),
                 format!(
@@ -482,7 +528,11 @@ mod tests {
         check_err(f64::NAN);
         check_err(f64::INFINITY);
 
-        assert!(processor.voxelize(0.5, false, None, None).is_ok());
+        assert!(
+            processor
+                .voxelize(0.5, false, None, None, None, None)
+                .is_ok()
+        );
     }
 
     #[test]
@@ -504,7 +554,7 @@ mod tests {
 
         let assert_narrow_band_error = |band: f64| {
             let err = processor
-                .voxelize(0.5, false, Some(band), None)
+                .voxelize(0.5, false, Some(band), None, None, None)
                 .unwrap_err();
             assert_eq!(
                 err.to_string(),
@@ -520,8 +570,16 @@ mod tests {
         assert_narrow_band_error(f64::INFINITY);
         assert_narrow_band_error(f64::NEG_INFINITY);
 
-        assert!(processor.voxelize(0.5, false, Some(0.0), None).is_ok());
-        assert!(processor.voxelize(0.5, false, Some(2.0), None).is_ok());
+        assert!(
+            processor
+                .voxelize(0.5, false, Some(0.0), None, None, None)
+                .is_ok()
+        );
+        assert!(
+            processor
+                .voxelize(0.5, false, Some(2.0), None, None, None)
+                .is_ok()
+        );
     }
 
     #[test]
@@ -563,7 +621,9 @@ mod tests {
             bounds_max,
         };
 
-        let particles = processor.voxelize(0.5, false, None, None).unwrap();
+        let particles = processor
+            .voxelize(0.5, false, None, None, None, None)
+            .unwrap();
         assert_eq!(
             particles.len(),
             8,
