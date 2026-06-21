@@ -37,6 +37,8 @@ pub struct TransformConfig {
     pub rotate: Option<[f64; 3]>,  // x, y, z in degrees
     pub crop: Option<[f64; 6]>,    // min_x, min_y, min_z, max_x, max_y, max_z
     pub vertex_noise: Option<f64>, // random displacement amplitude
+    pub twist: Option<f64>,        // twist rotation multiplier
+    pub taper: Option<f64>,        // taper scale multiplier
 }
 
 impl Default for TransformConfig {
@@ -48,6 +50,8 @@ impl Default for TransformConfig {
             rotate: None,
             crop: None,
             vertex_noise: None,
+            twist: None,
+            taper: None,
         }
     }
 }
@@ -84,6 +88,26 @@ impl MeshProcessor {
 
             for p in &mut points {
                 *p = rotation * *p;
+            }
+        }
+
+        if let Some(twist) = transform.twist {
+            for p in &mut points {
+                let angle = p.z * twist;
+                let c = angle.cos();
+                let s = angle.sin();
+                let x = p.x * c - p.y * s;
+                let y = p.x * s + p.y * c;
+                p.x = x;
+                p.y = y;
+            }
+        }
+
+        if let Some(taper) = transform.taper {
+            for p in &mut points {
+                let scale = 1.0 + p.z * taper;
+                p.x *= scale;
+                p.y *= scale;
             }
         }
 
@@ -246,12 +270,16 @@ impl MeshProcessor {
         Ok((points, indices))
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn voxelize(
         &self,
         resolution: f64,
         surface_only: bool,
         narrow_band: Option<f64>,
         phase_sphere: Option<[f64; 4]>,
+        phase_cuboid: Option<[f64; 6]>,
+        porosity: Option<f64>,
+        fiber: bool,
     ) -> Result<Vec<ParticleData>> {
         if !resolution.is_finite() || resolution <= 1e-6 {
             anyhow::bail!(
@@ -363,6 +391,14 @@ impl MeshProcessor {
                                 };
 
                                 if keep {
+                                    if let Some(p_val) = porosity {
+                                        let dot = x * 12.9898 + y * 78.233 + z * 151.7182;
+                                        let hash = (dot.sin() * 43758.5453).fract().abs();
+                                        if hash < p_val {
+                                            continue;
+                                        }
+                                    }
+
                                     let mut phase = 0;
                                     if let Some(sphere) = phase_sphere {
                                         let dx = x - sphere[0];
@@ -373,6 +409,23 @@ impl MeshProcessor {
                                             phase = 1;
                                         }
                                     }
+                                    #[allow(clippy::collapsible_if)]
+                                    if let Some(c) = phase_cuboid {
+                                        if x >= c[0] && y >= c[1] && z >= c[2] && x <= c[3] && y <= c[4] && z <= c[5] {
+                                            phase = 1;
+                                        }
+                                    }
+
+                                    let (fiber_x, fiber_y) = if fiber {
+                                        let dot = x * 12.9898 + y * 78.233 + z * 151.7182;
+                                        let angle = (dot.sin() * 43758.5453).fract()
+                                            * std::f64::consts::PI
+                                            * 2.0;
+                                        (angle.cos() as f32, angle.sin() as f32)
+                                    } else {
+                                        (0.0, 0.0)
+                                    };
+
                                     local_particles.push(ParticleData {
                                         x: x as f32,
                                         y: y as f32,
@@ -380,8 +433,8 @@ impl MeshProcessor {
                                         sdf,
                                         phase,
                                         label_id: 0,
-                                        fiber_x: 0.0,
-                                        fiber_y: 0.0,
+                                        fiber_x,
+                                        fiber_y,
                                     });
                                 }
                             }
@@ -409,6 +462,14 @@ impl MeshProcessor {
                             };
 
                             if keep {
+                                if let Some(p_val) = porosity {
+                                    let dot = x * 12.9898 + y * 78.233 + z * 151.7182;
+                                    let hash = (dot.sin() * 43758.5453).fract().abs();
+                                    if hash < p_val {
+                                        continue;
+                                    }
+                                }
+
                                 let mut phase = 0;
                                 if let Some(sphere) = phase_sphere {
                                     let dx = x - sphere[0];
@@ -419,6 +480,23 @@ impl MeshProcessor {
                                         phase = 1;
                                     }
                                 }
+                                #[allow(clippy::collapsible_if)]
+                                if let Some(c) = phase_cuboid {
+                                    if x >= c[0] && y >= c[1] && z >= c[2] && x <= c[3] && y <= c[4] && z <= c[5] {
+                                        phase = 1;
+                                    }
+                                }
+
+                                let (fiber_x, fiber_y) = if fiber {
+                                    let dot = x * 12.9898 + y * 78.233 + z * 151.7182;
+                                    let angle = (dot.sin() * 43758.5453).fract()
+                                        * std::f64::consts::PI
+                                        * 2.0;
+                                    (angle.cos() as f32, angle.sin() as f32)
+                                } else {
+                                    (0.0, 0.0)
+                                };
+
                                 local_particles.push(ParticleData {
                                     x: x as f32,
                                     y: y as f32,
@@ -426,8 +504,8 @@ impl MeshProcessor {
                                     sdf,
                                     phase,
                                     label_id: 0,
-                                    fiber_x: 0.0,
-                                    fiber_y: 0.0,
+                                    fiber_x,
+                                    fiber_y,
                                 });
                             }
                         }
@@ -466,7 +544,9 @@ mod tests {
         };
 
         let check_err = |res: f64| {
-            let err = processor.voxelize(res, false, None, None).unwrap_err();
+            let err = processor
+                .voxelize(res, false, None, None, None, None, false)
+                .unwrap_err();
             assert_eq!(
                 err.to_string(),
                 format!(
@@ -482,7 +562,11 @@ mod tests {
         check_err(f64::NAN);
         check_err(f64::INFINITY);
 
-        assert!(processor.voxelize(0.5, false, None, None).is_ok());
+        assert!(
+            processor
+                .voxelize(0.5, false, None, None, None, None, false)
+                .is_ok()
+        );
     }
 
     #[test]
@@ -504,7 +588,7 @@ mod tests {
 
         let assert_narrow_band_error = |band: f64| {
             let err = processor
-                .voxelize(0.5, false, Some(band), None)
+                .voxelize(0.5, false, Some(band), None, None, None, false)
                 .unwrap_err();
             assert_eq!(
                 err.to_string(),
@@ -520,8 +604,16 @@ mod tests {
         assert_narrow_band_error(f64::INFINITY);
         assert_narrow_band_error(f64::NEG_INFINITY);
 
-        assert!(processor.voxelize(0.5, false, Some(0.0), None).is_ok());
-        assert!(processor.voxelize(0.5, false, Some(2.0), None).is_ok());
+        assert!(
+            processor
+                .voxelize(0.5, false, Some(0.0), None, None, None, false)
+                .is_ok()
+        );
+        assert!(
+            processor
+                .voxelize(0.5, false, Some(2.0), None, None, None, false)
+                .is_ok()
+        );
     }
 
     #[test]
@@ -563,7 +655,9 @@ mod tests {
             bounds_max,
         };
 
-        let particles = processor.voxelize(0.5, false, None, None).unwrap();
+        let particles = processor
+            .voxelize(0.5, false, None, None, None, None, false)
+            .unwrap();
         assert_eq!(
             particles.len(),
             8,
