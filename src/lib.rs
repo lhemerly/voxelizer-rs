@@ -398,14 +398,19 @@ impl MeshProcessor {
 
                             let is_inside = intersections_to_right % 2 != 0;
 
-                            let distance =
-                                self.mesh.distance_to_local_point(&point_3d, false) as f32;
-                            let sdf = if is_inside { -distance } else { distance };
-
-                            let keep = if let Some(band) = narrow_band {
-                                sdf.abs() <= band as f32
+                            let (sdf, keep) = if let Some(band) = narrow_band {
+                                let distance =
+                                    self.mesh.distance_to_local_point(&point_3d, false) as f32;
+                                let sdf = if is_inside { -distance } else { distance };
+                                (sdf, sdf.abs() <= band as f32)
                             } else {
-                                sdf <= 0.0
+                                if is_inside {
+                                    let distance =
+                                        self.mesh.distance_to_local_point(&point_3d, false) as f32;
+                                    (-distance, true)
+                                } else {
+                                    (f32::INFINITY, false)
+                                }
                             };
 
                             if keep {
