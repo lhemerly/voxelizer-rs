@@ -43,6 +43,15 @@ struct Args {
     #[arg(long, value_parser = parse_vec4)]
     phase_sphere: Option<[f64; 4]>,
 
+    #[arg(long, value_parser = validate_porosity)]
+    porosity: Option<f64>,
+
+    #[arg(long, value_parser = parse_vec2)]
+    fiber: Option<[f64; 2]>,
+
+    #[arg(long)]
+    gyroid_period: Option<f64>,
+
     #[arg(long)]
     threads: Option<usize>,
 }
@@ -163,6 +172,9 @@ fn main() -> anyhow::Result<()> {
         args.surface_only,
         args.narrow_band,
         args.phase_sphere,
+        args.porosity,
+        args.fiber,
+        args.gyroid_period,
     )?;
 
     println!("Generated {} particles.", particles.len());
@@ -323,4 +335,29 @@ fn main() -> anyhow::Result<()> {
 
     println!("Saved to {}", args.output);
     Ok(())
+}
+
+fn parse_vec2(s: &str) -> Result<[f64; 2], String> {
+    let parts: Vec<&str> = s.split(',').collect();
+    if parts.len() != 2 {
+        return Err(format!("Expected 'x,y', got '{}'", s));
+    }
+    let x = parts[0]
+        .parse()
+        .map_err(|_| format!("Invalid x: {}", parts[0]))?;
+    let y = parts[1]
+        .parse()
+        .map_err(|_| format!("Invalid y: {}", parts[1]))?;
+    Ok([x, y])
+}
+
+fn validate_porosity(s: &str) -> Result<f64, String> {
+    let val: f64 = s.parse().map_err(|_| format!("`{s}` isn't a number"))?;
+    if (0.0..=1.0).contains(&val) {
+        Ok(val)
+    } else {
+        Err(format!(
+            "Porosity must be between 0.0 and 1.0. Provided: {s}"
+        ))
+    }
 }

@@ -246,12 +246,16 @@ impl MeshProcessor {
         Ok((points, indices))
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn voxelize(
         &self,
         resolution: f64,
         surface_only: bool,
         narrow_band: Option<f64>,
         phase_sphere: Option<[f64; 4]>,
+        porosity: Option<f64>,
+        fiber: Option<[f64; 2]>,
+        gyroid_period: Option<f64>,
     ) -> Result<Vec<ParticleData>> {
         if !resolution.is_finite() || resolution <= 1e-6 {
             anyhow::bail!(
@@ -362,6 +366,26 @@ impl MeshProcessor {
                                     true
                                 };
 
+                                let keep = keep
+                                    && if let Some(period) = gyroid_period {
+                                        let scale = 2.0 * std::f64::consts::PI / period;
+                                        let val = (x * scale).sin() * (y * scale).cos()
+                                            + (y * scale).sin() * (z * scale).cos()
+                                            + (z * scale).sin() * (x * scale).cos();
+                                        val <= 0.0
+                                    } else {
+                                        true
+                                    };
+
+                                let keep = keep
+                                    && if let Some(p) = porosity {
+                                        let dot = x * 12.9898 + y * 78.233 + z * 151.7182;
+                                        let hash = (dot.sin() * 43758.5453).fract().abs();
+                                        hash >= p
+                                    } else {
+                                        true
+                                    };
+
                                 if keep {
                                     let mut phase = 0;
                                     if let Some(sphere) = phase_sphere {
@@ -380,8 +404,8 @@ impl MeshProcessor {
                                         sdf,
                                         phase,
                                         label_id: 0,
-                                        fiber_x: 0.0,
-                                        fiber_y: 0.0,
+                                        fiber_x: fiber.map_or(0.0, |f| f[0] as f32),
+                                        fiber_y: fiber.map_or(0.0, |f| f[1] as f32),
                                     });
                                 }
                             }
@@ -408,6 +432,26 @@ impl MeshProcessor {
                                 sdf <= 0.0
                             };
 
+                            let keep = keep
+                                && if let Some(period) = gyroid_period {
+                                    let scale = 2.0 * std::f64::consts::PI / period;
+                                    let val = (x * scale).sin() * (y * scale).cos()
+                                        + (y * scale).sin() * (z * scale).cos()
+                                        + (z * scale).sin() * (x * scale).cos();
+                                    val <= 0.0
+                                } else {
+                                    true
+                                };
+
+                            let keep = keep
+                                && if let Some(p) = porosity {
+                                    let dot = x * 12.9898 + y * 78.233 + z * 151.7182;
+                                    let hash = (dot.sin() * 43758.5453).fract().abs();
+                                    hash >= p
+                                } else {
+                                    true
+                                };
+
                             if keep {
                                 let mut phase = 0;
                                 if let Some(sphere) = phase_sphere {
@@ -426,8 +470,8 @@ impl MeshProcessor {
                                     sdf,
                                     phase,
                                     label_id: 0,
-                                    fiber_x: 0.0,
-                                    fiber_y: 0.0,
+                                    fiber_x: fiber.map_or(0.0, |f| f[0] as f32),
+                                    fiber_y: fiber.map_or(0.0, |f| f[1] as f32),
                                 });
                             }
                         }
@@ -466,7 +510,9 @@ mod tests {
         };
 
         let check_err = |res: f64| {
-            let err = processor.voxelize(res, false, None, None).unwrap_err();
+            let err = processor
+                .voxelize(res, false, None, None, None, None, None)
+                .unwrap_err();
             assert_eq!(
                 err.to_string(),
                 format!(
@@ -482,7 +528,11 @@ mod tests {
         check_err(f64::NAN);
         check_err(f64::INFINITY);
 
-        assert!(processor.voxelize(0.5, false, None, None).is_ok());
+        assert!(
+            processor
+                .voxelize(0.5, false, None, None, None, None, None)
+                .is_ok()
+        );
     }
 
     #[test]
@@ -504,7 +554,7 @@ mod tests {
 
         let assert_narrow_band_error = |band: f64| {
             let err = processor
-                .voxelize(0.5, false, Some(band), None)
+                .voxelize(0.5, false, Some(band), None, None, None, None)
                 .unwrap_err();
             assert_eq!(
                 err.to_string(),
@@ -520,8 +570,16 @@ mod tests {
         assert_narrow_band_error(f64::INFINITY);
         assert_narrow_band_error(f64::NEG_INFINITY);
 
-        assert!(processor.voxelize(0.5, false, Some(0.0), None).is_ok());
-        assert!(processor.voxelize(0.5, false, Some(2.0), None).is_ok());
+        assert!(
+            processor
+                .voxelize(0.5, false, Some(0.0), None, None, None, None)
+                .is_ok()
+        );
+        assert!(
+            processor
+                .voxelize(0.5, false, Some(2.0), None, None, None, None)
+                .is_ok()
+        );
     }
 
     #[test]
@@ -563,7 +621,9 @@ mod tests {
             bounds_max,
         };
 
-        let particles = processor.voxelize(0.5, false, None, None).unwrap();
+        let particles = processor
+            .voxelize(0.5, false, None, None, None, None, None)
+            .unwrap();
         assert_eq!(
             particles.len(),
             8,
@@ -788,4 +848,104 @@ mod tests {
 
         std::fs::remove_file(file_path).unwrap();
     }
+}
+
+#[test]
+fn test_voxelize_porosity() {
+    let points = vec![
+        Point::new(0.0, 0.0, 0.0),
+        Point::new(10.0, 0.0, 0.0),
+        Point::new(10.0, 10.0, 0.0),
+        Point::new(0.0, 10.0, 0.0),
+        Point::new(0.0, 0.0, 10.0),
+        Point::new(10.0, 0.0, 10.0),
+        Point::new(10.0, 10.0, 10.0),
+        Point::new(0.0, 10.0, 10.0),
+    ];
+
+    let indices = vec![
+        [0, 1, 2],
+        [0, 2, 3],
+        [5, 4, 7],
+        [5, 7, 6],
+        [4, 5, 1],
+        [4, 1, 0],
+        [3, 2, 6],
+        [3, 6, 7],
+        [4, 0, 3],
+        [4, 3, 7],
+        [1, 5, 6],
+        [1, 6, 2],
+    ];
+
+    let mesh = TriMesh::new(points, indices);
+    let aabb = mesh.local_aabb();
+    let bounds_min = aabb.mins;
+    let bounds_max = aabb.maxs;
+
+    let processor = MeshProcessor {
+        mesh,
+        bounds_min,
+        bounds_max,
+    };
+
+    let solid_particles = processor
+        .voxelize(1.0, false, None, None, None, None, None)
+        .unwrap();
+    let porous_particles = processor
+        .voxelize(1.0, false, None, None, Some(0.5), None, None)
+        .unwrap();
+
+    assert!(porous_particles.len() < solid_particles.len());
+    assert!(porous_particles.len() > 0);
+}
+
+#[test]
+fn test_voxelize_gyroid() {
+    let points = vec![
+        Point::new(0.0, 0.0, 0.0),
+        Point::new(10.0, 0.0, 0.0),
+        Point::new(10.0, 10.0, 0.0),
+        Point::new(0.0, 10.0, 0.0),
+        Point::new(0.0, 0.0, 10.0),
+        Point::new(10.0, 0.0, 10.0),
+        Point::new(10.0, 10.0, 10.0),
+        Point::new(0.0, 10.0, 10.0),
+    ];
+
+    let indices = vec![
+        [0, 1, 2],
+        [0, 2, 3],
+        [5, 4, 7],
+        [5, 7, 6],
+        [4, 5, 1],
+        [4, 1, 0],
+        [3, 2, 6],
+        [3, 6, 7],
+        [4, 0, 3],
+        [4, 3, 7],
+        [1, 5, 6],
+        [1, 6, 2],
+    ];
+
+    let mesh = TriMesh::new(points, indices);
+    let aabb = mesh.local_aabb();
+    let bounds_min = aabb.mins;
+    let bounds_max = aabb.maxs;
+
+    let processor = MeshProcessor {
+        mesh,
+        bounds_min,
+        bounds_max,
+    };
+
+    let solid_particles = processor
+        .voxelize(1.0, false, None, None, None, None, None)
+        .unwrap();
+    let gyroid_particles = processor
+        .voxelize(1.0, false, None, None, None, None, Some(5.0))
+        .unwrap();
+
+    assert!(gyroid_particles.len() < solid_particles.len());
+    assert!(gyroid_particles.len() > 0);
 }
