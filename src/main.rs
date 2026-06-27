@@ -45,6 +45,26 @@ struct Args {
 
     #[arg(long)]
     threads: Option<usize>,
+
+    #[arg(long, value_parser = parse_vec2)]
+    fiber: Option<[f64; 2]>,
+
+    #[arg(long)]
+    porosity: Option<f64>,
+}
+
+fn parse_vec2(s: &str) -> Result<[f64; 2], String> {
+    let parts: Vec<&str> = s.split(',').collect();
+    if parts.len() != 2 {
+        return Err(format!("Expected 'x,y', got '{}'", s));
+    }
+    let x = parts[0]
+        .parse()
+        .map_err(|_| format!("Invalid x: {}", parts[0]))?;
+    let y = parts[1]
+        .parse()
+        .map_err(|_| format!("Invalid y: {}", parts[1]))?;
+    Ok([x, y])
 }
 
 fn parse_vec4(s: &str) -> Result<[f64; 4], String> {
@@ -163,6 +183,8 @@ fn main() -> anyhow::Result<()> {
         args.surface_only,
         args.narrow_band,
         args.phase_sphere,
+        args.fiber,
+        args.porosity,
     )?;
 
     println!("Generated {} particles.", particles.len());
