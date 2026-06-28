@@ -43,8 +43,31 @@ struct Args {
     #[arg(long, value_parser = parse_vec4)]
     phase_sphere: Option<[f64; 4]>,
 
+    #[arg(long, value_parser = parse_vec2)]
+    gyroid: Option<[f64; 2]>,
+
+    #[arg(long)]
+    shell: Option<f64>,
+
+    #[arg(long)]
+    slice_phases: Option<u32>,
+
     #[arg(long)]
     threads: Option<usize>,
+}
+
+fn parse_vec2(s: &str) -> Result<[f64; 2], String> {
+    let parts: Vec<&str> = s.split(',').collect();
+    if parts.len() != 2 {
+        return Err(format!("Expected 'scale,thickness', got '{}'", s));
+    }
+    let s_val = parts[0]
+        .parse()
+        .map_err(|_| format!("Invalid scale: {}", parts[0]))?;
+    let t_val = parts[1]
+        .parse()
+        .map_err(|_| format!("Invalid thickness: {}", parts[1]))?;
+    Ok([s_val, t_val])
 }
 
 fn parse_vec4(s: &str) -> Result<[f64; 4], String> {
@@ -138,6 +161,12 @@ fn validate_narrow_band(s: &str) -> Result<f64, String> {
 fn main() -> anyhow::Result<()> {
     let args = Args::parse();
 
+    if args.surface_only && args.gyroid.is_some() {
+        anyhow::bail!(
+            "Cannot use --gyroid with --surface-only. Gyroid infill requires solid voxelization. Please remove --surface-only."
+        );
+    }
+
     if let Some(threads) = args.threads {
         rayon::ThreadPoolBuilder::new()
             .num_threads(threads)
@@ -158,11 +187,17 @@ fn main() -> anyhow::Result<()> {
     };
 
     let processor = MeshProcessor::from_file(&args.input, &transform)?;
+    let modifiers = voxelizer_rs::VolumetricModifiers {
+        gyroid: args.gyroid,
+        shell: args.shell,
+        slice_phases: args.slice_phases,
+        phase_sphere: args.phase_sphere,
+    };
     let particles = processor.voxelize(
         args.resolution,
         args.surface_only,
         args.narrow_band,
-        args.phase_sphere,
+        &modifiers,
     )?;
 
     println!("Generated {} particles.", particles.len());
