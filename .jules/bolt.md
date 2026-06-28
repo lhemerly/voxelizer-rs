@@ -11,3 +11,7 @@ When Rayon `par_iter` spins up many small work units, frequent dynamic allocatio
 ## 2024-04-19 - Fast Scanline Raycasting
 **Learning:** For solid voxelization, the naive approach casted a ray from EVERY voxel cell's center. By recognizing that we only need to query intersections along a single axis (e.g. +X), we can instead cast just ONE ray per (Y, Z) row starting from outside the mesh, record all intersection points, sort them, and then compute the parity (`intersections_to_right % 2 != 0`) for each cell along that scanline. This reduced the number of raycasts per row from `N` to `1`, resulting in an ~80% performance improvement for solid voxelization. While previous attempts at scanline caching had issues with un-closed meshes, sorting the intersections and computing exact intersections-to-the-right for each point perfectly matches the old point-by-point parity behavior.
 **Action:** When performing grid-based intersection checks along a fixed axis, try to evaluate the entire line at once rather than independently per cell to drastically reduce BVH traversal overhead.
+
+## 2024-06-28 - Fast Path SDF calculation
+**Learning:** `distance_to_local_point` is an expensive BVH query. For solid voxelization, exterior voxels can bypass this check when `narrow_band` is `None` by assigning a positive SDF (e.g., `f32::INFINITY`), safely discarding them and drastically speeding up processing.
+**Action:** Always check if expensive geometric queries can be bypassed for voxels that are guaranteed to be filtered out later, avoiding unnecessary computations.
