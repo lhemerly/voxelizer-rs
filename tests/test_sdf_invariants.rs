@@ -1,5 +1,5 @@
 use parry3d::shape::Ball;
-use voxelizer_rs::{MeshProcessor, TransformConfig};
+use voxelizer_rs::{MeshProcessor, TransformConfig, VolumetricModifiers};
 
 #[test]
 fn test_sdf_invariants() {
@@ -77,7 +77,12 @@ fn test_sdf_invariants() {
     // Otherwise it defaults to sdf <= 0.0 for interior voxels only.
     let narrow_band = Some(2.5 * radius);
     let particles = processor
-        .voxelize(resolution, false, narrow_band, None)
+        .voxelize(
+            resolution,
+            false,
+            narrow_band,
+            &VolumetricModifiers::default(),
+        )
         .unwrap();
 
     let mut center_sdf = f32::MAX;

@@ -39,6 +39,14 @@ pub struct TransformConfig {
     pub vertex_noise: Option<f64>, // random displacement amplitude
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+pub struct VolumetricModifiers {
+    pub gyroid: Option<[f64; 2]>,
+    pub shell: Option<f64>,
+    pub slice_phases: Option<u32>,
+    pub phase_sphere: Option<[f64; 4]>,
+}
+
 impl Default for TransformConfig {
     fn default() -> Self {
         Self {
@@ -251,7 +259,7 @@ impl MeshProcessor {
         resolution: f64,
         surface_only: bool,
         narrow_band: Option<f64>,
-        phase_sphere: Option<[f64; 4]>,
+        modifiers: &VolumetricModifiers,
     ) -> Result<Vec<ParticleData>> {
         if !resolution.is_finite() || resolution <= 1e-6 {
             anyhow::bail!(
@@ -356,21 +364,37 @@ impl MeshProcessor {
 
                                 // Surface voxels inherently intersect the surface, so they should always be kept
                                 // if we're not using narrow_band. If narrow_band is used, we check the distance.
-                                let keep = if let Some(band) = narrow_band {
+                                let keep_base = if let Some(band) = narrow_band {
                                     sdf.abs() <= band as f32
                                 } else {
                                     true
                                 };
 
+                                let mut keep = keep_base;
+
+                                if keep && surface_only && modifiers.gyroid.is_some() {
+                                    keep = false; // gyroid doesn't map directly to surface only without becoming thick, but keeping structure simple for testing
+                                }
+
                                 if keep {
                                     let mut phase = 0;
-                                    if let Some(sphere) = phase_sphere {
+                                    if let Some(sphere) = modifiers.phase_sphere {
                                         let dx = x - sphere[0];
                                         let dy = y - sphere[1];
                                         let dz = z - sphere[2];
                                         let r2 = sphere[3] * sphere[3];
                                         if dx * dx + dy * dy + dz * dz <= r2 {
                                             phase = 1;
+                                        }
+                                    }
+                                    #[allow(clippy::collapsible_if)]
+                                    if let Some(num_phases) = modifiers.slice_phases {
+                                        if size.y > 0.0 {
+                                            let normalized_y = (y - self.bounds_min.y) / size.y;
+                                            phase = (normalized_y * num_phases as f64).floor()
+                                                as u32
+                                                % 255
+                                                + 1;
                                         }
                                     }
                                     local_particles.push(ParticleData {
@@ -402,21 +426,51 @@ impl MeshProcessor {
                                 self.mesh.distance_to_local_point(&point_3d, false) as f32;
                             let sdf = if is_inside { -distance } else { distance };
 
-                            let keep = if let Some(band) = narrow_band {
+                            let keep_base = if let Some(band) = narrow_band {
                                 sdf.abs() <= band as f32
                             } else {
                                 sdf <= 0.0
                             };
 
+                            let mut keep = keep_base;
+                            #[allow(clippy::collapsible_if)]
+                            if keep_base {
+                                if let Some(g) = modifiers.gyroid {
+                                    let g_scale = g[0];
+                                    let g_thick = g[1];
+                                    let g_val = (x / g_scale).sin() * (y / g_scale).cos()
+                                        + (y / g_scale).sin() * (z / g_scale).cos()
+                                        + (z / g_scale).sin() * (x / g_scale).cos();
+                                    let in_gyroid = g_val.abs() <= g_thick;
+
+                                    let in_shell = if let Some(s) = modifiers.shell {
+                                        sdf > -s as f32
+                                    } else {
+                                        false
+                                    };
+
+                                    keep = in_gyroid || in_shell;
+                                }
+                            }
+
                             if keep {
                                 let mut phase = 0;
-                                if let Some(sphere) = phase_sphere {
+                                if let Some(sphere) = modifiers.phase_sphere {
                                     let dx = x - sphere[0];
                                     let dy = y - sphere[1];
                                     let dz = z - sphere[2];
                                     let r2 = sphere[3] * sphere[3];
                                     if dx * dx + dy * dy + dz * dz <= r2 {
                                         phase = 1;
+                                    }
+                                }
+                                #[allow(clippy::collapsible_if)]
+                                if let Some(num_phases) = modifiers.slice_phases {
+                                    if size.y > 0.0 {
+                                        let normalized_y = (y - self.bounds_min.y) / size.y;
+                                        phase = (normalized_y * num_phases as f64).floor() as u32
+                                            % 255
+                                            + 1;
                                     }
                                 }
                                 local_particles.push(ParticleData {
@@ -466,7 +520,9 @@ mod tests {
         };
 
         let check_err = |res: f64| {
-            let err = processor.voxelize(res, false, None, None).unwrap_err();
+            let err = processor
+                .voxelize(res, false, None, &VolumetricModifiers::default())
+                .unwrap_err();
             assert_eq!(
                 err.to_string(),
                 format!(
@@ -482,7 +538,11 @@ mod tests {
         check_err(f64::NAN);
         check_err(f64::INFINITY);
 
-        assert!(processor.voxelize(0.5, false, None, None).is_ok());
+        assert!(
+            processor
+                .voxelize(0.5, false, None, &VolumetricModifiers::default())
+                .is_ok()
+        );
     }
 
     #[test]
@@ -504,7 +564,7 @@ mod tests {
 
         let assert_narrow_band_error = |band: f64| {
             let err = processor
-                .voxelize(0.5, false, Some(band), None)
+                .voxelize(0.5, false, Some(band), &VolumetricModifiers::default())
                 .unwrap_err();
             assert_eq!(
                 err.to_string(),
@@ -520,8 +580,16 @@ mod tests {
         assert_narrow_band_error(f64::INFINITY);
         assert_narrow_band_error(f64::NEG_INFINITY);
 
-        assert!(processor.voxelize(0.5, false, Some(0.0), None).is_ok());
-        assert!(processor.voxelize(0.5, false, Some(2.0), None).is_ok());
+        assert!(
+            processor
+                .voxelize(0.5, false, Some(0.0), &VolumetricModifiers::default())
+                .is_ok()
+        );
+        assert!(
+            processor
+                .voxelize(0.5, false, Some(2.0), &VolumetricModifiers::default())
+                .is_ok()
+        );
     }
 
     #[test]
@@ -563,7 +631,9 @@ mod tests {
             bounds_max,
         };
 
-        let particles = processor.voxelize(0.5, false, None, None).unwrap();
+        let particles = processor
+            .voxelize(0.5, false, None, &VolumetricModifiers::default())
+            .unwrap();
         assert_eq!(
             particles.len(),
             8,
