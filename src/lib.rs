@@ -246,12 +246,16 @@ impl MeshProcessor {
         Ok((points, indices))
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn voxelize(
         &self,
         resolution: f64,
         surface_only: bool,
         narrow_band: Option<f64>,
         phase_sphere: Option<[f64; 4]>,
+        gyroid_scale: Option<f64>,
+        gyroid_thickness: f64,
+        porosity: Option<f64>,
     ) -> Result<Vec<ParticleData>> {
         if !resolution.is_finite() || resolution <= 1e-6 {
             anyhow::bail!(
@@ -264,6 +268,12 @@ impl MeshProcessor {
             anyhow::bail!(
                 "Narrow band must be a finite non-negative number. Provided: {}",
                 narrow_band.unwrap()
+            );
+        }
+
+        if surface_only && (gyroid_scale.is_some() || porosity.is_some()) {
+            anyhow::bail!(
+                "Cannot use internal volume modifiers (Gyroid or porosity) with --surface-only."
             );
         }
 
@@ -402,11 +412,35 @@ impl MeshProcessor {
                                 self.mesh.distance_to_local_point(&point_3d, false) as f32;
                             let sdf = if is_inside { -distance } else { distance };
 
-                            let keep = if let Some(band) = narrow_band {
+                            let mut keep = if let Some(band) = narrow_band {
                                 sdf.abs() <= band as f32
                             } else {
                                 sdf <= 0.0
                             };
+
+                            if keep && sdf <= 0.0 {
+                                if let Some(scale) = gyroid_scale {
+                                    let sx = x * scale;
+                                    let sy = y * scale;
+                                    let sz = z * scale;
+                                    let val = sx.sin() * sy.cos()
+                                        + sy.sin() * sz.cos()
+                                        + sz.sin() * sx.cos();
+                                    if val.abs() > gyroid_thickness {
+                                        keep = false;
+                                    }
+                                }
+                                #[allow(clippy::collapsible_if)]
+                                if keep {
+                                    if let Some(p) = porosity {
+                                        let dot = x * 12.9898 + y * 78.233 + z * 151.7182;
+                                        let hash = (dot.sin() * 43758.5453).fract().abs();
+                                        if hash < p {
+                                            keep = false;
+                                        }
+                                    }
+                                }
+                            }
 
                             if keep {
                                 let mut phase = 0;
@@ -466,7 +500,9 @@ mod tests {
         };
 
         let check_err = |res: f64| {
-            let err = processor.voxelize(res, false, None, None).unwrap_err();
+            let err = processor
+                .voxelize(res, false, None, None, None, 0.0, None)
+                .unwrap_err();
             assert_eq!(
                 err.to_string(),
                 format!(
@@ -482,7 +518,11 @@ mod tests {
         check_err(f64::NAN);
         check_err(f64::INFINITY);
 
-        assert!(processor.voxelize(0.5, false, None, None).is_ok());
+        assert!(
+            processor
+                .voxelize(0.5, false, None, None, None, 0.0, None)
+                .is_ok()
+        );
     }
 
     #[test]
@@ -504,7 +544,7 @@ mod tests {
 
         let assert_narrow_band_error = |band: f64| {
             let err = processor
-                .voxelize(0.5, false, Some(band), None)
+                .voxelize(0.5, false, Some(band), None, None, 0.0, None)
                 .unwrap_err();
             assert_eq!(
                 err.to_string(),
@@ -520,8 +560,16 @@ mod tests {
         assert_narrow_band_error(f64::INFINITY);
         assert_narrow_band_error(f64::NEG_INFINITY);
 
-        assert!(processor.voxelize(0.5, false, Some(0.0), None).is_ok());
-        assert!(processor.voxelize(0.5, false, Some(2.0), None).is_ok());
+        assert!(
+            processor
+                .voxelize(0.5, false, Some(0.0), None, None, 0.0, None)
+                .is_ok()
+        );
+        assert!(
+            processor
+                .voxelize(0.5, false, Some(2.0), None, None, 0.0, None)
+                .is_ok()
+        );
     }
 
     #[test]
@@ -563,7 +611,9 @@ mod tests {
             bounds_max,
         };
 
-        let particles = processor.voxelize(0.5, false, None, None).unwrap();
+        let particles = processor
+            .voxelize(0.5, false, None, None, None, 0.0, None)
+            .unwrap();
         assert_eq!(
             particles.len(),
             8,
