@@ -44,6 +44,15 @@ struct Args {
     phase_sphere: Option<[f64; 4]>,
 
     #[arg(long)]
+    infill: Option<String>,
+
+    #[arg(long, default_value_t = 10.0)]
+    infill_scale: f64,
+
+    #[arg(long, default_value_t = 1.0)]
+    shell_thickness: f64,
+
+    #[arg(long)]
     threads: Option<usize>,
 }
 
@@ -163,6 +172,9 @@ fn main() -> anyhow::Result<()> {
         args.surface_only,
         args.narrow_band,
         args.phase_sphere,
+        args.infill.as_deref(),
+        args.infill_scale,
+        args.shell_thickness,
     )?;
 
     println!("Generated {} particles.", particles.len());
