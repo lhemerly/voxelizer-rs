@@ -51,6 +51,12 @@ Arguments:
 
 ``` --phase-sphere ```: Specify a sphere for assigning a phase 'x,y,z,radius' (e.g., `--phase-sphere 0,0,0,5`).
 
+``` --infill ```: Procedural volumetric infill generation. Use `--infill gyroid` for Gyroid lattice infill.
+
+``` --infill-scale ```: Scale/frequency of the procedural infill (default: 10.0).
+
+``` --shell-thickness ```: Thickness of the outer solid shell when using infill (default: 1.0).
+
 ``` --threads ```: Number of parallel threads to use. Defaults to the system's logical core count.
 
 ## Binary Format Specification

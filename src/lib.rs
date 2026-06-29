@@ -246,12 +246,16 @@ impl MeshProcessor {
         Ok((points, indices))
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn voxelize(
         &self,
         resolution: f64,
         surface_only: bool,
         narrow_band: Option<f64>,
         phase_sphere: Option<[f64; 4]>,
+        infill: Option<&str>,
+        infill_scale: f64,
+        shell_thickness: f64,
     ) -> Result<Vec<ParticleData>> {
         if !resolution.is_finite() || resolution <= 1e-6 {
             anyhow::bail!(
@@ -356,11 +360,24 @@ impl MeshProcessor {
 
                                 // Surface voxels inherently intersect the surface, so they should always be kept
                                 // if we're not using narrow_band. If narrow_band is used, we check the distance.
-                                let keep = if let Some(band) = narrow_band {
+                                let mut keep = if let Some(band) = narrow_band {
                                     sdf.abs() <= band as f32
                                 } else {
                                     true
                                 };
+
+                                if keep && infill == Some("gyroid") && sdf < -shell_thickness as f32
+                                {
+                                    let sx = x / infill_scale;
+                                    let sy = y / infill_scale;
+                                    let sz = z / infill_scale;
+                                    let val = sx.sin() * sy.cos()
+                                        + sy.sin() * sz.cos()
+                                        + sz.sin() * sx.cos();
+                                    if val.abs() > 0.5 {
+                                        keep = false;
+                                    }
+                                }
 
                                 if keep {
                                     let mut phase = 0;
@@ -402,11 +419,22 @@ impl MeshProcessor {
                                 self.mesh.distance_to_local_point(&point_3d, false) as f32;
                             let sdf = if is_inside { -distance } else { distance };
 
-                            let keep = if let Some(band) = narrow_band {
+                            let mut keep = if let Some(band) = narrow_band {
                                 sdf.abs() <= band as f32
                             } else {
                                 sdf <= 0.0
                             };
+
+                            if keep && infill == Some("gyroid") && sdf < -shell_thickness as f32 {
+                                let sx = x / infill_scale;
+                                let sy = y / infill_scale;
+                                let sz = z / infill_scale;
+                                let val =
+                                    sx.sin() * sy.cos() + sy.sin() * sz.cos() + sz.sin() * sx.cos();
+                                if val.abs() > 0.5 {
+                                    keep = false;
+                                }
+                            }
 
                             if keep {
                                 let mut phase = 0;
@@ -447,6 +475,57 @@ impl MeshProcessor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn test_voxelize_gyroid_infill() {
+        let points = vec![
+            Point::new(0.0, 0.0, 0.0),
+            Point::new(10.0, 0.0, 0.0),
+            Point::new(10.0, 10.0, 0.0),
+            Point::new(0.0, 10.0, 0.0),
+            Point::new(0.0, 0.0, 10.0),
+            Point::new(10.0, 0.0, 10.0),
+            Point::new(10.0, 10.0, 10.0),
+            Point::new(0.0, 10.0, 10.0),
+        ];
+
+        let indices = vec![
+            [0, 1, 2],
+            [0, 2, 3], // Front
+            [5, 4, 7],
+            [5, 7, 6], // Back
+            [4, 5, 1],
+            [4, 1, 0], // Bottom
+            [3, 2, 6],
+            [3, 6, 7], // Top
+            [4, 0, 3],
+            [4, 3, 7], // Left
+            [1, 5, 6],
+            [1, 6, 2], // Right
+        ];
+
+        let mesh = TriMesh::new(points, indices);
+        let aabb = mesh.local_aabb();
+        let bounds_min = aabb.mins;
+        let bounds_max = aabb.maxs;
+
+        let processor = MeshProcessor {
+            mesh,
+            bounds_min,
+            bounds_max,
+        };
+
+        let solid_particles = processor
+            .voxelize(0.5, false, None, None, None, 10.0, 1.0)
+            .unwrap();
+        let gyroid_particles = processor
+            .voxelize(0.5, false, None, None, Some("gyroid"), 2.0, 1.0)
+            .unwrap();
+
+        assert!(
+            gyroid_particles.len() < solid_particles.len(),
+            "Gyroid infill should remove some internal voxels"
+        );
+    }
 
     #[test]
     fn test_voxelize_invalid_resolution() {
@@ -466,7 +545,9 @@ mod tests {
         };
 
         let check_err = |res: f64| {
-            let err = processor.voxelize(res, false, None, None).unwrap_err();
+            let err = processor
+                .voxelize(res, false, None, None, None, 10.0, 1.0)
+                .unwrap_err();
             assert_eq!(
                 err.to_string(),
                 format!(
@@ -482,7 +563,11 @@ mod tests {
         check_err(f64::NAN);
         check_err(f64::INFINITY);
 
-        assert!(processor.voxelize(0.5, false, None, None).is_ok());
+        assert!(
+            processor
+                .voxelize(0.5, false, None, None, None, 10.0, 1.0)
+                .is_ok()
+        );
     }
 
     #[test]
@@ -504,7 +589,7 @@ mod tests {
 
         let assert_narrow_band_error = |band: f64| {
             let err = processor
-                .voxelize(0.5, false, Some(band), None)
+                .voxelize(0.5, false, Some(band), None, None, 10.0, 1.0)
                 .unwrap_err();
             assert_eq!(
                 err.to_string(),
@@ -520,8 +605,16 @@ mod tests {
         assert_narrow_band_error(f64::INFINITY);
         assert_narrow_band_error(f64::NEG_INFINITY);
 
-        assert!(processor.voxelize(0.5, false, Some(0.0), None).is_ok());
-        assert!(processor.voxelize(0.5, false, Some(2.0), None).is_ok());
+        assert!(
+            processor
+                .voxelize(0.5, false, Some(0.0), None, None, 10.0, 1.0)
+                .is_ok()
+        );
+        assert!(
+            processor
+                .voxelize(0.5, false, Some(2.0), None, None, 10.0, 1.0)
+                .is_ok()
+        );
     }
 
     #[test]
@@ -563,7 +656,9 @@ mod tests {
             bounds_max,
         };
 
-        let particles = processor.voxelize(0.5, false, None, None).unwrap();
+        let particles = processor
+            .voxelize(0.5, false, None, None, None, 10.0, 1.0)
+            .unwrap();
         assert_eq!(
             particles.len(),
             8,
