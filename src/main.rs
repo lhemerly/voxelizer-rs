@@ -45,6 +45,26 @@ struct Args {
 
     #[arg(long)]
     threads: Option<usize>,
+
+    #[arg(long)]
+    hollow: Option<f64>,
+
+    #[arg(long, value_parser = parse_vec2)]
+    gyroid: Option<[f64; 2]>,
+}
+
+fn parse_vec2(s: &str) -> Result<[f64; 2], String> {
+    let parts: Vec<&str> = s.split(',').collect();
+    if parts.len() != 2 {
+        return Err(format!("Expected 'scale,thickness', got '{}'", s));
+    }
+    let x = parts[0]
+        .parse()
+        .map_err(|_| format!("Invalid scale: {}", parts[0]))?;
+    let y = parts[1]
+        .parse()
+        .map_err(|_| format!("Invalid thickness: {}", parts[1]))?;
+    Ok([x, y])
 }
 
 fn parse_vec4(s: &str) -> Result<[f64; 4], String> {
@@ -158,11 +178,17 @@ fn main() -> anyhow::Result<()> {
     };
 
     let processor = MeshProcessor::from_file(&args.input, &transform)?;
+    if args.surface_only && (args.hollow.is_some() || args.gyroid.is_some()) {
+        anyhow::bail!("Cannot use --hollow or --gyroid with --surface-only.");
+    }
+
     let particles = processor.voxelize(
         args.resolution,
         args.surface_only,
         args.narrow_band,
         args.phase_sphere,
+        args.hollow,
+        args.gyroid,
     )?;
 
     println!("Generated {} particles.", particles.len());
@@ -306,6 +332,14 @@ fn main() -> anyhow::Result<()> {
         Some("obj") => {
             for p in &particles {
                 writeln!(writer, "v {} {} {}", p.x, p.y, p.z)?;
+            }
+        }
+        Some("mcfunction") => {
+            for p in &particles {
+                let vx = (p.x / args.resolution as f32).round() as i32;
+                let vy = (p.y / args.resolution as f32).round() as i32;
+                let vz = (p.z / args.resolution as f32).round() as i32;
+                writeln!(writer, "setblock ~{} ~{} ~{} minecraft:stone", vx, vy, vz)?;
             }
         }
         _ => {
