@@ -246,12 +246,15 @@ impl MeshProcessor {
         Ok((points, indices))
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn voxelize(
         &self,
         resolution: f64,
         surface_only: bool,
         narrow_band: Option<f64>,
         phase_sphere: Option<[f64; 4]>,
+        hollow: Option<f64>,
+        gyroid: Option<[f64; 2]>,
     ) -> Result<Vec<ParticleData>> {
         if !resolution.is_finite() || resolution <= 1e-6 {
             anyhow::bail!(
@@ -405,7 +408,29 @@ impl MeshProcessor {
                             let keep = if let Some(band) = narrow_band {
                                 sdf.abs() <= band as f32
                             } else {
-                                sdf <= 0.0
+                                let mut is_kept = sdf <= 0.0;
+
+                                if is_kept {
+                                    if let Some(thickness) = hollow {
+                                        if sdf < -(thickness as f32) {
+                                            is_kept = false;
+                                        }
+                                    }
+
+                                    if let Some([scale, t]) = gyroid {
+                                        let px = x * scale;
+                                        let py = y * scale;
+                                        let pz = z * scale;
+                                        let g = px.sin() * py.cos()
+                                            + py.sin() * pz.cos()
+                                            + pz.sin() * px.cos();
+                                        if g.abs() > t {
+                                            is_kept = false; // Not part of the gyroid shell
+                                        }
+                                    }
+                                }
+
+                                is_kept
                             };
 
                             if keep {
@@ -466,7 +491,9 @@ mod tests {
         };
 
         let check_err = |res: f64| {
-            let err = processor.voxelize(res, false, None, None).unwrap_err();
+            let err = processor
+                .voxelize(res, false, None, None, None, None)
+                .unwrap_err();
             assert_eq!(
                 err.to_string(),
                 format!(
@@ -482,7 +509,11 @@ mod tests {
         check_err(f64::NAN);
         check_err(f64::INFINITY);
 
-        assert!(processor.voxelize(0.5, false, None, None).is_ok());
+        assert!(
+            processor
+                .voxelize(0.5, false, None, None, None, None)
+                .is_ok()
+        );
     }
 
     #[test]
@@ -504,7 +535,7 @@ mod tests {
 
         let assert_narrow_band_error = |band: f64| {
             let err = processor
-                .voxelize(0.5, false, Some(band), None)
+                .voxelize(0.5, false, Some(band), None, None, None)
                 .unwrap_err();
             assert_eq!(
                 err.to_string(),
@@ -520,8 +551,16 @@ mod tests {
         assert_narrow_band_error(f64::INFINITY);
         assert_narrow_band_error(f64::NEG_INFINITY);
 
-        assert!(processor.voxelize(0.5, false, Some(0.0), None).is_ok());
-        assert!(processor.voxelize(0.5, false, Some(2.0), None).is_ok());
+        assert!(
+            processor
+                .voxelize(0.5, false, Some(0.0), None, None, None)
+                .is_ok()
+        );
+        assert!(
+            processor
+                .voxelize(0.5, false, Some(2.0), None, None, None)
+                .is_ok()
+        );
     }
 
     #[test]
@@ -563,7 +602,9 @@ mod tests {
             bounds_max,
         };
 
-        let particles = processor.voxelize(0.5, false, None, None).unwrap();
+        let particles = processor
+            .voxelize(0.5, false, None, None, None, None)
+            .unwrap();
         assert_eq!(
             particles.len(),
             8,
