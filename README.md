@@ -37,6 +37,12 @@ Arguments:
 
 ``` --narrow-band ```: Optional value. Evaluate and store only the voxels where the absolute distance is within the desired threshold (e.g., `--narrow-band 1.0`).
 
+``` --hollow ```: Optional value. Hollows out the mesh interior, leaving a shell of the specified thickness (e.g., `--hollow 1.5`).
+
+``` --porosity ```: Optional value (0.0 to 1.0). Randomly drops a fraction of solid voxels to simulate a porous material (e.g., `--porosity 0.2`).
+
+``` --mold ```: Optional flag. Inverts the voxelization to generate the negative space (the mold) around the mesh.
+
 ``` --scale ```: Scale multiplier for the mesh dimensions (default: 1.0).
 
 ``` --center ```: Optional flag. If provided, the mesh will be centered at the origin (0, 0, 0) before processing.
