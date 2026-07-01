@@ -7,42 +7,55 @@ use voxelizer_rs::{MeshProcessor, ParticleHeader, TransformConfig};
 #[derive(Parser, Debug)]
 #[command(author, version, about = "Voxelizer")]
 struct Args {
+    /// Path to source mesh.
     #[arg(short, long)]
     input: String,
 
+    /// Path to destination file. The format is inferred from the extension (`.csv`, `.ply`, `.vtk`, `.obj`, `.vox`, or `.bin`).
     #[arg(short, long)]
     output: String,
 
+    /// Voxel size in mesh units (default: 0.5).
     #[arg(short, long, default_value_t = 0.5, value_parser = validate_resolution)]
     resolution: f64,
 
+    /// Optional flag. If provided, the output will only contain surface voxels instead of solid filling.
     #[arg(long)]
     surface_only: bool,
 
+    /// Optional value. Evaluate and store only the voxels where the absolute distance is within the desired threshold (e.g., `--narrow-band 1.0`).
     #[arg(long, value_parser = validate_narrow_band)]
     narrow_band: Option<f64>,
 
+    /// Scale multiplier for the mesh dimensions (default: 1.0).
     #[arg(long, default_value_t = 1.0)]
     scale: f64,
 
+    /// Optional flag. If provided, the mesh will be centered at the origin (0, 0, 0) before processing.
     #[arg(long)]
     center: bool,
 
+    /// Translates the mesh by 'x,y,z' offsets (e.g., `--translate 10,-5,0`).
     #[arg(long, value_parser = parse_vec3)]
     translate: Option<[f64; 3]>,
 
+    /// Rotates the mesh by 'x,y,z' degrees (e.g., `--rotate 90,0,0`).
     #[arg(long, value_parser = parse_vec3)]
     rotate: Option<[f64; 3]>,
 
+    /// Crops the voxelization bounding box (the evaluated spatial volume) to the given bounding box 'min_x,min_y,min_z,max_x,max_y,max_z' (e.g., `--crop -10,-10,-10,10,10,10`).
     #[arg(long, value_parser = parse_vec6)]
     crop: Option<[f64; 6]>,
 
+    /// Adds random displacement noise with the specified amplitude.
     #[arg(long)]
     vertex_noise: Option<f64>,
 
+    /// Specify a sphere for assigning a phase 'x,y,z,radius' (e.g., `--phase-sphere 0,0,0,5`).
     #[arg(long, value_parser = parse_vec4)]
     phase_sphere: Option<[f64; 4]>,
 
+    /// Number of parallel threads to use. Defaults to the system's logical core count.
     #[arg(long)]
     threads: Option<usize>,
 }
