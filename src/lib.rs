@@ -246,12 +246,16 @@ impl MeshProcessor {
         Ok((points, indices))
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn voxelize(
         &self,
         resolution: f64,
         surface_only: bool,
         narrow_band: Option<f64>,
         phase_sphere: Option<[f64; 4]>,
+        hollow: Option<f64>,
+        mold: bool,
+        porosity: Option<f64>,
     ) -> Result<Vec<ParticleData>> {
         if !resolution.is_finite() || resolution <= 1e-6 {
             anyhow::bail!(
@@ -404,11 +408,22 @@ impl MeshProcessor {
 
                             let keep = if let Some(band) = narrow_band {
                                 sdf.abs() <= band as f32
+                            } else if mold {
+                                sdf >= 0.0
+                            } else if let Some(thickness) = hollow {
+                                sdf <= 0.0 && sdf >= -(thickness as f32)
                             } else {
                                 sdf <= 0.0
                             };
 
                             if keep {
+                                if let Some(p_factor) = porosity {
+                                    let dot = x * 12.9898 + y * 78.233 + z * 151.7182;
+                                    let hash = (dot.sin() * 43758.5453).fract().abs();
+                                    if hash < p_factor {
+                                        continue;
+                                    }
+                                }
                                 let mut phase = 0;
                                 if let Some(sphere) = phase_sphere {
                                     let dx = x - sphere[0];
@@ -466,7 +481,9 @@ mod tests {
         };
 
         let check_err = |res: f64| {
-            let err = processor.voxelize(res, false, None, None).unwrap_err();
+            let err = processor
+                .voxelize(res, false, None, None, None, false, None)
+                .unwrap_err();
             assert_eq!(
                 err.to_string(),
                 format!(
@@ -482,7 +499,11 @@ mod tests {
         check_err(f64::NAN);
         check_err(f64::INFINITY);
 
-        assert!(processor.voxelize(0.5, false, None, None).is_ok());
+        assert!(
+            processor
+                .voxelize(0.5, false, None, None, None, false, None)
+                .is_ok()
+        );
     }
 
     #[test]
@@ -504,7 +525,7 @@ mod tests {
 
         let assert_narrow_band_error = |band: f64| {
             let err = processor
-                .voxelize(0.5, false, Some(band), None)
+                .voxelize(0.5, false, Some(band), None, None, false, None)
                 .unwrap_err();
             assert_eq!(
                 err.to_string(),
@@ -520,8 +541,16 @@ mod tests {
         assert_narrow_band_error(f64::INFINITY);
         assert_narrow_band_error(f64::NEG_INFINITY);
 
-        assert!(processor.voxelize(0.5, false, Some(0.0), None).is_ok());
-        assert!(processor.voxelize(0.5, false, Some(2.0), None).is_ok());
+        assert!(
+            processor
+                .voxelize(0.5, false, Some(0.0), None, None, false, None)
+                .is_ok()
+        );
+        assert!(
+            processor
+                .voxelize(0.5, false, Some(2.0), None, None, false, None)
+                .is_ok()
+        );
     }
 
     #[test]
@@ -563,7 +592,9 @@ mod tests {
             bounds_max,
         };
 
-        let particles = processor.voxelize(0.5, false, None, None).unwrap();
+        let particles = processor
+            .voxelize(0.5, false, None, None, None, false, None)
+            .unwrap();
         assert_eq!(
             particles.len(),
             8,
@@ -787,5 +818,136 @@ mod tests {
         assert!((processor.bounds_max.y - 1.0).abs() < 1e-5);
 
         std::fs::remove_file(file_path).unwrap();
+    }
+
+    #[test]
+    fn test_voxelize_hollow() {
+        let points = vec![
+            Point::new(0.0, 0.0, 0.0),
+            Point::new(10.0, 0.0, 0.0),
+            Point::new(10.0, 10.0, 0.0),
+            Point::new(0.0, 10.0, 0.0),
+            Point::new(0.0, 0.0, 10.0),
+            Point::new(10.0, 0.0, 10.0),
+            Point::new(10.0, 10.0, 10.0),
+            Point::new(0.0, 10.0, 10.0),
+        ];
+        let indices = vec![
+            [0, 1, 2],
+            [0, 2, 3],
+            [5, 4, 7],
+            [5, 7, 6],
+            [4, 5, 1],
+            [4, 1, 0],
+            [3, 2, 6],
+            [3, 6, 7],
+            [4, 0, 3],
+            [4, 3, 7],
+            [1, 5, 6],
+            [1, 6, 2],
+        ];
+        let mesh = TriMesh::new(points, indices);
+        let bounds_min = Point3::new(0.0, 0.0, 0.0);
+        let bounds_max = Point3::new(10.0, 10.0, 10.0);
+        let processor = MeshProcessor {
+            mesh,
+            bounds_min,
+            bounds_max,
+        };
+
+        let particles = processor
+            .voxelize(1.0, false, None, None, Some(2.0), false, None)
+            .unwrap();
+        for p in &particles {
+            assert!(p.sdf <= 0.0 && p.sdf >= -2.0);
+        }
+    }
+
+    #[test]
+    fn test_voxelize_mold() {
+        let points = vec![
+            Point::new(0.0, 0.0, 0.0),
+            Point::new(10.0, 0.0, 0.0),
+            Point::new(10.0, 10.0, 0.0),
+            Point::new(0.0, 10.0, 0.0),
+            Point::new(0.0, 0.0, 10.0),
+            Point::new(10.0, 0.0, 10.0),
+            Point::new(10.0, 10.0, 10.0),
+            Point::new(0.0, 10.0, 10.0),
+        ];
+        let indices = vec![
+            [0, 1, 2],
+            [0, 2, 3],
+            [5, 4, 7],
+            [5, 7, 6],
+            [4, 5, 1],
+            [4, 1, 0],
+            [3, 2, 6],
+            [3, 6, 7],
+            [4, 0, 3],
+            [4, 3, 7],
+            [1, 5, 6],
+            [1, 6, 2],
+        ];
+        let mesh = TriMesh::new(points, indices);
+        let bounds_min = Point3::new(0.0, 0.0, 0.0);
+        let bounds_max = Point3::new(10.0, 10.0, 10.0);
+        let processor = MeshProcessor {
+            mesh,
+            bounds_min,
+            bounds_max,
+        };
+
+        let particles = processor
+            .voxelize(1.0, false, None, None, None, true, None)
+            .unwrap();
+        for p in &particles {
+            assert!(p.sdf >= 0.0);
+        }
+    }
+
+    #[test]
+    fn test_voxelize_porosity() {
+        let points = vec![
+            Point::new(0.0, 0.0, 0.0),
+            Point::new(10.0, 0.0, 0.0),
+            Point::new(10.0, 10.0, 0.0),
+            Point::new(0.0, 10.0, 0.0),
+            Point::new(0.0, 0.0, 10.0),
+            Point::new(10.0, 0.0, 10.0),
+            Point::new(10.0, 10.0, 10.0),
+            Point::new(0.0, 10.0, 10.0),
+        ];
+        let indices = vec![
+            [0, 1, 2],
+            [0, 2, 3],
+            [5, 4, 7],
+            [5, 7, 6],
+            [4, 5, 1],
+            [4, 1, 0],
+            [3, 2, 6],
+            [3, 6, 7],
+            [4, 0, 3],
+            [4, 3, 7],
+            [1, 5, 6],
+            [1, 6, 2],
+        ];
+        let mesh = TriMesh::new(points, indices);
+        let bounds_min = Point3::new(0.0, 0.0, 0.0);
+        let bounds_max = Point3::new(10.0, 10.0, 10.0);
+        let processor = MeshProcessor {
+            mesh,
+            bounds_min,
+            bounds_max,
+        };
+
+        let particles_full = processor
+            .voxelize(1.0, false, None, None, None, false, None)
+            .unwrap();
+        let particles_porous = processor
+            .voxelize(1.0, false, None, None, None, false, Some(0.5))
+            .unwrap();
+
+        assert!(particles_porous.len() < particles_full.len());
     }
 }
