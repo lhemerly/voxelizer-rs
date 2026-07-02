@@ -19,6 +19,9 @@ struct Args {
     #[arg(long)]
     surface_only: bool,
 
+    #[arg(long, value_parser = validate_thickness)]
+    hollow: Option<f64>,
+
     #[arg(long, value_parser = validate_narrow_band)]
     narrow_band: Option<f64>,
 
@@ -124,6 +127,17 @@ fn validate_resolution(s: &str) -> Result<f64, String> {
     }
 }
 
+fn validate_thickness(s: &str) -> Result<f64, String> {
+    let val: f64 = s.parse().map_err(|_| format!("`{s}` isn't a number"))?;
+    if val.is_finite() && val >= 0.0 {
+        Ok(val)
+    } else {
+        Err(format!(
+            "Hollow thickness must be a finite non-negative number. Provided: {s}"
+        ))
+    }
+}
+
 fn validate_narrow_band(s: &str) -> Result<f64, String> {
     let val: f64 = s.parse().map_err(|_| format!("`{s}` isn't a number"))?;
     if val.is_finite() && val >= 0.0 {
@@ -163,6 +177,7 @@ fn main() -> anyhow::Result<()> {
         args.surface_only,
         args.narrow_band,
         args.phase_sphere,
+        args.hollow,
     )?;
 
     println!("Generated {} particles.", particles.len());
