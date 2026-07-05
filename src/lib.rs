@@ -298,114 +298,68 @@ impl MeshProcessor {
 
         // We avoid collecting the entire yz cartesian product to save memory.
         // Instead we can use rayon's `into_par_iter` on a range or use flat_map across the ranges.
-        let particles: Vec<ParticleData> = (0..ny)
+        let particles: Vec<ParticleData> = (0..ny * nz)
             .into_par_iter()
-            .flat_map(|iy| {
-                (0..nz).into_par_iter().flat_map(move |iz| {
-                    let mut local_particles = Vec::with_capacity(nx as usize);
-                    let y = bounds_min.y + (iy as f64 * resolution) + (resolution * 0.5);
-                    let z = bounds_min.z + (iz as f64 * resolution) + (resolution * 0.5);
+            .flat_map(|idx| {
+                let iy = idx / nz;
+                let iz = idx % nz;
+                let mut local_particles = Vec::with_capacity(nx as usize);
+                let y = bounds_min.y + (iy as f64 * resolution) + (resolution * 0.5);
+                let z = bounds_min.z + (iz as f64 * resolution) + (resolution * 0.5);
 
-                    // Extract raycasting to be available for both modes so SDF sign is consistent.
-                    let start_x = self.bounds_min.x - 1.0;
-                    let ray_point = Point::new(start_x, y, z);
-                    let ray = Ray::new(ray_point, Vector::x());
-                    let mut current_ray = ray;
-                    let max_dist = (bounds_max.x.max(self.bounds_max.x) - start_x) + 1.0;
+                // Extract raycasting to be available for both modes so SDF sign is consistent.
+                let start_x = self.bounds_min.x - 1.0;
+                let ray_point = Point::new(start_x, y, z);
+                let ray = Ray::new(ray_point, Vector::x());
+                let mut current_ray = ray;
+                let max_dist = (bounds_max.x.max(self.bounds_max.x) - start_x) + 1.0;
 
-                    let mut hit_xs = Vec::new();
-                    while let Some(hit_toi) = self.mesh.cast_local_ray(&current_ray, max_dist, true)
-                    {
-                        let hit_point = current_ray.point_at(hit_toi);
-                        hit_xs.push(hit_point.x);
+                let mut hit_xs = Vec::new();
+                while let Some(hit_toi) = self.mesh.cast_local_ray(&current_ray, max_dist, true) {
+                    let hit_point = current_ray.point_at(hit_toi);
+                    hit_xs.push(hit_point.x);
 
-                        current_ray = Ray::new(current_ray.point_at(hit_toi + 1e-4), Vector::x());
+                    current_ray = Ray::new(current_ray.point_at(hit_toi + 1e-4), Vector::x());
 
-                        if hit_xs.len() > 100_000 {
-                            break;
-                        }
+                    if hit_xs.len() > 100_000 {
+                        break;
                     }
+                }
 
-                    // Sort intersections just in case precision issues caused out-of-order results
-                    hit_xs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+                // Sort intersections just in case precision issues caused out-of-order results
+                hit_xs
+                    .sort_unstable_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
 
-                    // Iterate over X in the inner loop to optimize spatial cache locality.
-                    // Because rays are cast along the +X direction, doing X sequentially
-                    // keeps the raycast traversals in the same BVH region,
-                    // while parallelizing over (Y, Z) ensures finer granularity for Rayon.
-                    if surface_only {
-                        let half_res = resolution * 0.5;
-                        let cuboid = Cuboid::new(Vector::new(half_res, half_res, half_res));
-                        let mesh_iso = Isometry::identity();
+                // Iterate over X in the inner loop to optimize spatial cache locality.
+                // Because rays are cast along the +X direction, doing X sequentially
+                // keeps the raycast traversals in the same BVH region,
+                // while parallelizing over (Y, Z) ensures finer granularity for Rayon.
+                if surface_only {
+                    let half_res = resolution * 0.5;
+                    let cuboid = Cuboid::new(Vector::new(half_res, half_res, half_res));
+                    let mesh_iso = Isometry::identity();
 
-                        for ix in 0..nx {
-                            let x = bounds_min.x + (ix as f64 * resolution) + (resolution * 0.5);
-                            let point = Point::new(x, y, z);
-                            let voxel_iso = Isometry::translation(point.x, point.y, point.z);
+                    for ix in 0..nx {
+                        let x = bounds_min.x + (ix as f64 * resolution) + (resolution * 0.5);
+                        let point = Point::new(x, y, z);
+                        let voxel_iso = Isometry::translation(point.x, point.y, point.z);
 
-                            if let Ok(true) =
-                                intersection_test(&mesh_iso, &self.mesh, &voxel_iso, &cuboid)
-                            {
-                                let intersections_to_right =
-                                    hit_xs.len() - hit_xs.partition_point(|&hx| hx <= x);
-                                let is_inside = intersections_to_right % 2 != 0;
-
-                                let distance =
-                                    self.mesh.distance_to_local_point(&point, false) as f32;
-                                let sdf = if is_inside { -distance } else { distance };
-
-                                // Surface voxels inherently intersect the surface, so they should always be kept
-                                // if we're not using narrow_band. If narrow_band is used, we check the distance.
-                                let keep = if let Some(band) = narrow_band {
-                                    sdf.abs() <= band as f32
-                                } else {
-                                    true
-                                };
-
-                                if keep {
-                                    let mut phase = 0;
-                                    if let Some(sphere) = phase_sphere {
-                                        let dx = x - sphere[0];
-                                        let dy = y - sphere[1];
-                                        let dz = z - sphere[2];
-                                        let r2 = sphere[3] * sphere[3];
-                                        if dx * dx + dy * dy + dz * dz <= r2 {
-                                            phase = 1;
-                                        }
-                                    }
-                                    local_particles.push(ParticleData {
-                                        x: x as f32,
-                                        y: y as f32,
-                                        z: z as f32,
-                                        sdf,
-                                        phase,
-                                        label_id: 0,
-                                        fiber_x: 0.0,
-                                        fiber_y: 0.0,
-                                    });
-                                }
-                            }
-                        }
-                    } else {
-                        for ix in 0..nx {
-                            let x = bounds_min.x + (ix as f64 * resolution) + (resolution * 0.5);
-                            let point_3d = Point::new(x, y, z);
-
-                            // A point is inside if it has an odd number of intersections to its right (or left).
-                            // hit_xs is sorted, so we can use partition_point for O(log N) lookup.
+                        if let Ok(true) =
+                            intersection_test(&mesh_iso, &self.mesh, &voxel_iso, &cuboid)
+                        {
                             let intersections_to_right =
                                 hit_xs.len() - hit_xs.partition_point(|&hx| hx <= x);
-
                             let is_inside = intersections_to_right % 2 != 0;
 
-                            let distance =
-                                self.mesh.distance_to_local_point(&point_3d, false) as f32;
+                            let distance = self.mesh.distance_to_local_point(&point, false) as f32;
                             let sdf = if is_inside { -distance } else { distance };
 
+                            // Surface voxels inherently intersect the surface, so they should always be kept
+                            // if we're not using narrow_band. If narrow_band is used, we check the distance.
                             let keep = if let Some(band) = narrow_band {
                                 sdf.abs() <= band as f32
                             } else {
-                                sdf <= 0.0
+                                true
                             };
 
                             if keep {
@@ -432,8 +386,52 @@ impl MeshProcessor {
                             }
                         }
                     }
-                    local_particles
-                })
+                } else {
+                    for ix in 0..nx {
+                        let x = bounds_min.x + (ix as f64 * resolution) + (resolution * 0.5);
+                        let point_3d = Point::new(x, y, z);
+
+                        // A point is inside if it has an odd number of intersections to its right (or left).
+                        // hit_xs is sorted, so we can use partition_point for O(log N) lookup.
+                        let intersections_to_right =
+                            hit_xs.len() - hit_xs.partition_point(|&hx| hx <= x);
+
+                        let is_inside = intersections_to_right % 2 != 0;
+
+                        let distance = self.mesh.distance_to_local_point(&point_3d, false) as f32;
+                        let sdf = if is_inside { -distance } else { distance };
+
+                        let keep = if let Some(band) = narrow_band {
+                            sdf.abs() <= band as f32
+                        } else {
+                            sdf <= 0.0
+                        };
+
+                        if keep {
+                            let mut phase = 0;
+                            if let Some(sphere) = phase_sphere {
+                                let dx = x - sphere[0];
+                                let dy = y - sphere[1];
+                                let dz = z - sphere[2];
+                                let r2 = sphere[3] * sphere[3];
+                                if dx * dx + dy * dy + dz * dz <= r2 {
+                                    phase = 1;
+                                }
+                            }
+                            local_particles.push(ParticleData {
+                                x: x as f32,
+                                y: y as f32,
+                                z: z as f32,
+                                sdf,
+                                phase,
+                                label_id: 0,
+                                fiber_x: 0.0,
+                                fiber_y: 0.0,
+                            });
+                        }
+                    }
+                }
+                local_particles
             })
             .collect();
 
