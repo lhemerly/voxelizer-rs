@@ -45,7 +45,7 @@ Arguments:
 
 ``` --rotate ```: Rotates the mesh by 'x,y,z' degrees (e.g., `--rotate 90,0,0`).
 
-``` --crop ```: Crops the mesh to the given bounding box 'min_x,min_y,min_z,max_x,max_y,max_z' (e.g., `--crop -10,-10,-10,10,10,10`).
+``` --crop ```: Crops the voxelization bounding box to the given bounds 'min_x,min_y,min_z,max_x,max_y,max_z' (e.g., `--crop -10,-10,-10,10,10,10`).
 
 ``` --vertex-noise ```: Adds random displacement noise with the specified amplitude.
 
