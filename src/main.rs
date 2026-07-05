@@ -43,6 +43,15 @@ struct Args {
     #[arg(long, value_parser = parse_vec4)]
     phase_sphere: Option<[f64; 4]>,
 
+    #[arg(long, value_parser = validate_hollow)]
+    hollow: Option<f64>,
+
+    #[arg(long, value_parser = validate_porosity)]
+    porosity: Option<f64>,
+
+    #[arg(long)]
+    particle_jitter: Option<f64>,
+
     #[arg(long)]
     threads: Option<usize>,
 }
@@ -135,6 +144,28 @@ fn validate_narrow_band(s: &str) -> Result<f64, String> {
     }
 }
 
+fn validate_hollow(s: &str) -> Result<f64, String> {
+    let val: f64 = s.parse().map_err(|_| format!("`{s}` isn't a number"))?;
+    if val.is_finite() && val > 0.0 {
+        Ok(val)
+    } else {
+        Err(format!(
+            "Hollow thickness must be a finite positive number. Provided: {s}"
+        ))
+    }
+}
+
+fn validate_porosity(s: &str) -> Result<f64, String> {
+    let val: f64 = s.parse().map_err(|_| format!("`{s}` isn't a number"))?;
+    if val.is_finite() && (0.0..=1.0).contains(&val) {
+        Ok(val)
+    } else {
+        Err(format!(
+            "Porosity must be between 0.0 and 1.0. Provided: {s}"
+        ))
+    }
+}
+
 fn main() -> anyhow::Result<()> {
     let args = Args::parse();
 
@@ -163,6 +194,9 @@ fn main() -> anyhow::Result<()> {
         args.surface_only,
         args.narrow_band,
         args.phase_sphere,
+        args.hollow,
+        args.porosity,
+        args.particle_jitter,
     )?;
 
     println!("Generated {} particles.", particles.len());
