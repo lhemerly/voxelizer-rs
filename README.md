@@ -53,6 +53,12 @@ Arguments:
 
 ``` --threads ```: Number of parallel threads to use. Defaults to the system's logical core count.
 
+``` --hollow ```: Thickness to hollow out the solid mesh, keeping only voxels near the inner boundary.
+
+``` --porosity ```: Probability threshold [0.0, 1.0] to discard voxels. Higher values remove more voxels, making the shape porous.
+
+``` --particle-jitter ```: Amplitude of pseudo-random displacement applied individually to each output particle.
+
 ## Binary Format Specification
 
 The output file uses a compact custom binary format serialized via ```bincode```.
