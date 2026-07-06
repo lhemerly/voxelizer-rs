@@ -45,6 +45,9 @@ struct Args {
 
     #[arg(long)]
     threads: Option<usize>,
+
+    #[arg(long)]
+    porosity: Option<f64>,
 }
 
 fn parse_vec4(s: &str) -> Result<[f64; 4], String> {
@@ -163,6 +166,7 @@ fn main() -> anyhow::Result<()> {
         args.surface_only,
         args.narrow_band,
         args.phase_sphere,
+        args.porosity,
     )?;
 
     println!("Generated {} particles.", particles.len());
@@ -299,8 +303,16 @@ fn main() -> anyhow::Result<()> {
                 vy = vy.clamp(0, 255);
                 vz = vz.clamp(0, 255);
 
-                let color_idx = if p.phase > 0 { 2u8 } else { 1u8 };
-                writer.write_all(&[vx as u8, vy as u8, vz as u8, color_idx])?;
+                // Map SDF depth to color index 1-255
+                let depth = p.sdf.abs();
+                // Map depth from 0.0 to approx 5.0 mesh units.
+                let mut color_idx = (depth * 50.0).round() as i32;
+                color_idx = color_idx.clamp(1, 255);
+
+                if p.phase > 0 {
+                    color_idx = 255; // highlight phase
+                }
+                writer.write_all(&[vx as u8, vy as u8, vz as u8, color_idx as u8])?;
             }
         }
         Some("obj") => {
