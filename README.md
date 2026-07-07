@@ -49,6 +49,8 @@ Arguments:
 
 ``` --vertex-noise ```: Adds random displacement noise with the specified amplitude.
 
+``` --porosity ```: Randomly removes voxels with the specified probability (0.0 to 1.0) to create a porous structure.
+
 ``` --phase-sphere ```: Specify a sphere for assigning a phase 'x,y,z,radius' (e.g., `--phase-sphere 0,0,0,5`).
 
 ``` --threads ```: Number of parallel threads to use. Defaults to the system's logical core count.
