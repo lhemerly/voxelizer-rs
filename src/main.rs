@@ -43,8 +43,31 @@ struct Args {
     #[arg(long, value_parser = parse_vec4)]
     phase_sphere: Option<[f64; 4]>,
 
+    #[arg(long, value_parser = parse_vec2)]
+    gyroid: Option<[f64; 2]>,
+
+    #[arg(long)]
+    shell_thickness: Option<f64>,
+
+    #[arg(long)]
+    colorize_sdf: bool,
+
     #[arg(long)]
     threads: Option<usize>,
+}
+
+fn parse_vec2(s: &str) -> Result<[f64; 2], String> {
+    let parts: Vec<&str> = s.split(',').collect();
+    if parts.len() != 2 {
+        return Err(format!("Expected 'val1,val2', got '{}'", s));
+    }
+    let v0 = parts[0]
+        .parse()
+        .map_err(|_| format!("Invalid value: {}", parts[0]))?;
+    let v1 = parts[1]
+        .parse()
+        .map_err(|_| format!("Invalid value: {}", parts[1]))?;
+    Ok([v0, v1])
 }
 
 fn parse_vec4(s: &str) -> Result<[f64; 4], String> {
@@ -163,6 +186,8 @@ fn main() -> anyhow::Result<()> {
         args.surface_only,
         args.narrow_band,
         args.phase_sphere,
+        args.gyroid,
+        args.shell_thickness,
     )?;
 
     println!("Generated {} particles.", particles.len());
@@ -190,9 +215,41 @@ fn main() -> anyhow::Result<()> {
             writeln!(writer, "property float x")?;
             writeln!(writer, "property float y")?;
             writeln!(writer, "property float z")?;
+            if args.colorize_sdf {
+                writeln!(writer, "property uchar red")?;
+                writeln!(writer, "property uchar green")?;
+                writeln!(writer, "property uchar blue")?;
+            }
             writeln!(writer, "end_header")?;
+
+            let mut min_sdf = f32::MAX;
+            let mut max_sdf = f32::MIN;
+            if args.colorize_sdf {
+                for p in &particles {
+                    if p.sdf < min_sdf {
+                        min_sdf = p.sdf;
+                    }
+                    if p.sdf > max_sdf {
+                        max_sdf = p.sdf;
+                    }
+                }
+                if (max_sdf - min_sdf).abs() < 1e-6 {
+                    max_sdf = min_sdf + 1.0;
+                }
+            }
+
             for p in &particles {
-                writeln!(writer, "{} {} {}", p.x, p.y, p.z)?;
+                if args.colorize_sdf {
+                    let normalized = (p.sdf - min_sdf) / (max_sdf - min_sdf);
+                    let normalized = normalized.clamp(0.0, 1.0);
+                    // Blue to Red gradient
+                    let r = (normalized * 255.0) as u8;
+                    let g = 0u8;
+                    let b = ((1.0 - normalized) * 255.0) as u8;
+                    writeln!(writer, "{} {} {} {} {} {}", p.x, p.y, p.z, r, g, b)?;
+                } else {
+                    writeln!(writer, "{} {} {}", p.x, p.y, p.z)?;
+                }
             }
         }
         Some("vtk") => {
