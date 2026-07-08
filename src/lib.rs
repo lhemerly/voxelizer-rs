@@ -327,7 +327,9 @@ impl MeshProcessor {
                     }
 
                     // Sort intersections just in case precision issues caused out-of-order results
-                    hit_xs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+                    hit_xs.sort_unstable_by(|a, b| {
+                        a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)
+                    });
 
                     // Iterate over X in the inner loop to optimize spatial cache locality.
                     // Because rays are cast along the +X direction, doing X sequentially
@@ -398,8 +400,11 @@ impl MeshProcessor {
 
                             let is_inside = intersections_to_right % 2 != 0;
 
-                            let distance =
-                                self.mesh.distance_to_local_point(&point_3d, false) as f32;
+                            let distance = if !is_inside && narrow_band.is_none() {
+                                f32::INFINITY
+                            } else {
+                                self.mesh.distance_to_local_point(&point_3d, false) as f32
+                            };
                             let sdf = if is_inside { -distance } else { distance };
 
                             let keep = if let Some(band) = narrow_band {
